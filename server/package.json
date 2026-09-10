@@ -8,6 +8,7 @@
     "build": "tsc -p tsconfig.json",
     "start": "node dist/server.js",
     "test:e2e": "NODE_ENV=test tsx tests/e2e.ts",
+    "security:audit": "npm audit --audit-level=critical",
     "prisma:generate": "prisma generate",
     "prisma:validate": "prisma validate",
     "prisma:migrate": "prisma migrate dev",
@@ -17,7 +18,9 @@
   },
   "dependencies": {
     "@fastify/cors": "^10.0.2",
+    "@fastify/helmet": "^13.1.1",
     "@fastify/jwt": "^9.1.0",
+    "@fastify/rate-limit": "^11.2.0",
     "@prisma/client": "^6.19.3",
     "bcryptjs": "^3.0.2",
     "dotenv": "^17.2.2",
