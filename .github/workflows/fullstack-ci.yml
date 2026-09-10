@@ -50,6 +50,7 @@ jobs:
         with:
           node-version: 22
       - run: npm install
+      - run: npm run security:audit
       - run: npm run prisma:generate
       - run: npm run prisma:validate
       - run: npm run prisma:push
