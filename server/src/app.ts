@@ -7,6 +7,7 @@ import { classRoutes } from './routes/classes.js';
 import { studentRoutes } from './routes/students.js';
 import { attendanceRoutes } from './routes/attendance.js';
 import { tuitionRoutes } from './routes/tuition.js';
+import { adminRoutes } from './routes/admin.js';
 
 export async function buildApp() {
   const app = Fastify({ logger: process.env.NODE_ENV !== 'test' });
@@ -24,6 +25,7 @@ export async function buildApp() {
   await app.register(studentRoutes, { prefix: '/api/students' });
   await app.register(attendanceRoutes, { prefix: '/api/attendance' });
   await app.register(tuitionRoutes, { prefix: '/api/tuition' });
+  await app.register(adminRoutes, { prefix: '/api/admin' });
 
   return app;
 }
