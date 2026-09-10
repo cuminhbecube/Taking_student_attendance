@@ -16,13 +16,20 @@ const markSchema = z.object({
   type: z.enum(['NORMAL', 'MAKEUP', 'TRIAL']).default('NORMAL'),
   registeredClassId: z.string().min(1),
   note: z.string().max(1000).optional(),
-  lateMinutes: z.number().int().min(0).max(240).optional()
+  lateMinutes: z.number().int().min(0).max(240).optional(),
+  expectedUpdatedAt: z.string().datetime().optional()
 });
 
 const bulkSchema = z.object({ records: z.array(markSchema).min(1).max(500) });
 
 function canAccess(request: any, dojoId: string) {
   return request.user.role === 'SUPER_ADMIN' || request.user.dojoId === dojoId;
+}
+
+function normalizeSessionDay(value: string): Date | null {
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return null;
+  return new Date(Date.UTC(parsed.getUTCFullYear(), parsed.getUTCMonth(), parsed.getUTCDate()));
 }
 
 async function validateMark(session: any, data: z.infer<typeof markSchema>) {
@@ -36,12 +43,16 @@ async function validateMark(session: any, data: z.infer<typeof markSchema>) {
   if (data.type === 'NORMAL' && registeredClass.id !== session.classId) return { error: 'NORMAL_CLASS_MISMATCH' as const };
   if (data.type === 'MAKEUP' && registeredClass.id === session.classId) return { error: 'MAKEUP_REQUIRES_ORIGIN_CLASS' as const };
   if (data.type !== 'TRIAL') {
-    const enrollment = await prisma.classEnrollment.findFirst({
-      where: { studentId: student.id, classId: registeredClass.id, endedAt: null }
-    });
+    const enrollment = await prisma.classEnrollment.findFirst({ where: { studentId: student.id, classId: registeredClass.id, endedAt: null } });
     if (!enrollment) return { error: 'ACTIVE_ENROLLMENT_REQUIRED' as const };
   }
   return { student, registeredClass };
+}
+
+function hasWriteConflict(oldRecord: { updatedAt: Date } | null, expectedUpdatedAt?: string) {
+  if (!oldRecord || !expectedUpdatedAt) return false;
+  const expected = new Date(expectedUpdatedAt);
+  return Number.isNaN(expected.getTime()) || oldRecord.updatedAt.getTime() !== expected.getTime();
 }
 
 export async function attendanceRoutes(app: FastifyInstance) {
@@ -56,11 +67,16 @@ export async function attendanceRoutes(app: FastifyInstance) {
       if (!dojoClass) return reply.code(404).send({ error: 'CLASS_NOT_FOUND' });
       if (dojoClass.dojoId !== dojoId) return reply.code(403).send({ error: 'FORBIDDEN' });
     }
-    const from = query.from ? new Date(query.from) : undefined;
-    const to = query.to ? new Date(query.to) : undefined;
-    if ((from && Number.isNaN(from.getTime())) || (to && Number.isNaN(to.getTime()))) return reply.code(400).send({ error: 'INVALID_DATE_RANGE' });
+    const from = query.from ? normalizeSessionDay(query.from) : undefined;
+    const toDay = query.to ? normalizeSessionDay(query.to) : undefined;
+    if ((query.from && !from) || (query.to && !toDay)) return reply.code(400).send({ error: 'INVALID_DATE_RANGE' });
+    const toExclusive = toDay ? new Date(toDay.getTime() + 86_400_000) : undefined;
     const sessions = await prisma.attendanceSession.findMany({
-      where: { dojoId, ...(query.classId ? { classId: query.classId } : {}), ...((from || to) ? { sessionDate: { ...(from ? { gte: from } : {}), ...(to ? { lte: to } : {}) } } : {}) },
+      where: {
+        dojoId,
+        ...(query.classId ? { classId: query.classId } : {}),
+        ...((from || toExclusive) ? { sessionDate: { ...(from ? { gte: from } : {}), ...(toExclusive ? { lt: toExclusive } : {}) } } : {})
+      },
       include: { class: true, _count: { select: { records: true } } },
       orderBy: { sessionDate: 'desc' }
     });
@@ -73,8 +89,8 @@ export async function attendanceRoutes(app: FastifyInstance) {
     const dojoClass = await prisma.dojoClass.findUnique({ where: { id: parsed.data.classId } });
     if (!dojoClass) return reply.code(404).send({ error: 'CLASS_NOT_FOUND' });
     if (!canAccess(request, dojoClass.dojoId)) return reply.code(403).send({ error: 'FORBIDDEN' });
-    const sessionDate = new Date(parsed.data.sessionDate);
-    if (Number.isNaN(sessionDate.getTime())) return reply.code(400).send({ error: 'INVALID_DATE' });
+    const sessionDate = normalizeSessionDay(parsed.data.sessionDate);
+    if (!sessionDate) return reply.code(400).send({ error: 'INVALID_DATE' });
     const session = await prisma.attendanceSession.upsert({
       where: { classId_sessionDate: { classId: dojoClass.id, sessionDate } },
       update: { title: parsed.data.title },
@@ -106,6 +122,14 @@ export async function attendanceRoutes(app: FastifyInstance) {
     if ('error' in validated) return reply.code(400).send({ error: validated.error });
 
     const oldRecord = await prisma.attendanceRecord.findUnique({ where: { sessionId_studentId: { sessionId, studentId: validated.student.id } } });
+    if (hasWriteConflict(oldRecord, parsed.data.expectedUpdatedAt)) {
+      return reply.code(409).send({
+        error: 'ATTENDANCE_CONFLICT',
+        message: 'Bản ghi đã được thiết bị khác cập nhật. Hãy tải lại trước khi sửa.',
+        currentRecord: oldRecord
+      });
+    }
+
     const record = await prisma.$transaction(async tx => {
       const saved = await tx.attendanceRecord.upsert({
         where: { sessionId_studentId: { sessionId, studentId: validated.student.id } },
@@ -127,11 +151,15 @@ export async function attendanceRoutes(app: FastifyInstance) {
     if (!canAccess(request, session.dojoId)) return reply.code(403).send({ error: 'FORBIDDEN' });
     if (session.isFinalized) return reply.code(409).send({ error: 'SESSION_FINALIZED' });
 
-    const validatedRows: Array<{ data: z.infer<typeof markSchema>; studentId: string; registeredClassId: string }> = [];
+    const validatedRows: Array<{ data: z.infer<typeof markSchema>; studentId: string; registeredClassId: string; oldRecord: any }> = [];
     for (const data of parsed.data.records) {
       const validated = await validateMark(session, data);
       if ('error' in validated) return reply.code(400).send({ error: validated.error, studentId: data.studentId });
-      validatedRows.push({ data, studentId: validated.student.id, registeredClassId: validated.registeredClass.id });
+      const oldRecord = await prisma.attendanceRecord.findUnique({ where: { sessionId_studentId: { sessionId, studentId: validated.student.id } } });
+      if (hasWriteConflict(oldRecord, data.expectedUpdatedAt)) {
+        return reply.code(409).send({ error: 'ATTENDANCE_CONFLICT', studentId: data.studentId, currentRecord: oldRecord });
+      }
+      validatedRows.push({ data, studentId: validated.student.id, registeredClassId: validated.registeredClass.id, oldRecord });
     }
 
     const records = await prisma.$transaction(async tx => {
