@@ -16,10 +16,8 @@ export async function studentRoutes(app: FastifyInstance) {
   app.addHook('preHandler', authenticate);
 
   app.get('/', async request => {
-    const query = (request.query ?? {}) as { q?: string };
-    const dojoId = request.user.role === 'SUPER_ADMIN'
-      ? ((request.query as { dojoId?: string } | undefined)?.dojoId ?? null)
-      : request.user.dojoId;
+    const query = (request.query ?? {}) as { q?: string; dojoId?: string };
+    const dojoId = request.user.role === 'SUPER_ADMIN' ? query.dojoId ?? null : request.user.dojoId;
 
     if (!dojoId) return { students: [] };
 
@@ -55,13 +53,16 @@ export async function studentRoutes(app: FastifyInstance) {
     const dojoId = request.user.role === 'SUPER_ADMIN' ? body.dojoId : request.user.dojoId;
     if (!dojoId) return reply.code(400).send({ error: 'DOJO_REQUIRED' });
 
+    const dob = parsed.data.dob ? new Date(parsed.data.dob) : undefined;
+    if (dob && Number.isNaN(dob.getTime())) return reply.code(400).send({ error: 'INVALID_DOB' });
+
     const student = await prisma.student.create({
       data: {
         dojoId,
         code: parsed.data.code.trim(),
         name: parsed.data.name.trim(),
         belt: parsed.data.belt,
-        dob: parsed.data.dob ? new Date(parsed.data.dob) : undefined,
+        dob,
         parentPhone: parsed.data.parentPhone,
         notes: parsed.data.notes
       }
@@ -74,7 +75,12 @@ export async function studentRoutes(app: FastifyInstance) {
         action: 'STUDENT_CREATED',
         entityType: 'Student',
         entityId: student.id,
-        afterJson: student
+        metadata: {
+          code: student.code,
+          name: student.name,
+          belt: student.belt,
+          parentPhone: student.parentPhone
+        }
       }
     });
 
