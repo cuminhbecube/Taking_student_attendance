@@ -22,6 +22,20 @@ jobs:
 
   backend:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: attendance
+          POSTGRES_PASSWORD: attendance
+          POSTGRES_DB: attendance
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U attendance -d attendance"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=10
     defaults:
       run:
         working-directory: server
@@ -29,6 +43,7 @@ jobs:
       DATABASE_URL: postgresql://attendance:attendance@localhost:5432/attendance?schema=public
       JWT_SECRET: ci-only-secret-with-at-least-thirty-two-characters
       CORS_ORIGIN: http://localhost:5173
+      NODE_ENV: test
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -37,4 +52,7 @@ jobs:
       - run: npm install
       - run: npm run prisma:generate
       - run: npm run prisma:validate
+      - run: npm run prisma:push
+      - run: npm run prisma:seed
       - run: npm run build
+      - run: npm run test:e2e
