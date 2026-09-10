@@ -4,162 +4,183 @@ import { buildApp } from '../src/app.js';
 import { prisma } from '../src/lib/prisma.js';
 
 process.env.NODE_ENV = 'test';
-
 const app = await buildApp();
 
-async function login(username: string, password: string) {
+async function login(username: string, password: string, expected = 200) {
   const res = await app.inject({ method: 'POST', url: '/api/auth/login', payload: { username, password } });
-  assert.equal(res.statusCode, 200, `login ${username}: ${res.body}`);
-  const body = res.json() as { token: string; user: { id: string; dojoId: string | null; role: string } };
-  assert.ok(body.token);
-  return body;
+  assert.equal(res.statusCode, expected, `login ${username}: ${res.body}`);
+  return res.statusCode === 200 ? res.json() as any : res.json() as any;
 }
-
-function auth(token: string) {
-  return { authorization: `Bearer ${token}` };
-}
+const auth = (token: string) => ({ authorization: `Bearer ${token}` });
+const req = (method: string, url: string, token?: string, payload?: unknown) => app.inject({ method: method as any, url, headers: token ? auth(token) : undefined, payload });
 
 try {
-  const health = await app.inject({ method: 'GET', url: '/api/health' });
-  assert.equal(health.statusCode, 200);
-
-  const invalidLogin = await app.inject({ method: 'POST', url: '/api/auth/login', payload: { username: 'admin', password: 'wrong' } });
-  assert.equal(invalidLogin.statusCode, 401);
+  assert.equal((await req('GET', '/api/health')).statusCode, 200);
+  assert.equal((await login('admin', 'wrong', 401)).error, 'INVALID_CREDENTIALS');
 
   const admin = await login('admin', 'admin123');
   const dojoAdmin = await login('hanoikid', '123456');
   const teacher = await login('gv_lan', '123456');
   const coach = await login('hlv_tuan', '123456');
-  const otherDojoAdmin = await login('dojo_cg', 'dojo123');
-
+  const cgAdmin = await login('dojo_cg', 'dojo123');
   assert.equal(admin.user.role, 'SUPER_ADMIN');
   assert.equal(dojoAdmin.user.role, 'DOJO_ADMIN');
   assert.equal(teacher.user.role, 'TEACHER');
   assert.equal(coach.user.role, 'COACH');
-  assert.notEqual(dojoAdmin.user.dojoId, otherDojoAdmin.user.dojoId);
+  assert.notEqual(dojoAdmin.user.dojoId, cgAdmin.user.dojoId);
 
-  const hnkClasses = await app.inject({ method: 'GET', url: '/api/classes', headers: auth(dojoAdmin.token) });
-  assert.equal(hnkClasses.statusCode, 200);
-  const hnkClass = (hnkClasses.json() as any).classes[0];
-  assert.ok(hnkClass);
+  // Auth/me and tenant discovery.
+  assert.equal((await req('GET', '/api/auth/me', teacher.token)).statusCode, 200);
+  const dojosRes = await req('GET', '/api/admin/dojos', admin.token);
+  assert.equal(dojosRes.statusCode, 200);
+  assert.ok((dojosRes.json() as any).dojos.length >= 2);
+  assert.equal((await req('GET', '/api/admin/dojos', dojoAdmin.token)).statusCode, 403);
 
-  const cgClasses = await app.inject({ method: 'GET', url: '/api/classes', headers: auth(otherDojoAdmin.token) });
-  assert.equal(cgClasses.statusCode, 200);
-  const cgClass = (cgClasses.json() as any).classes[0];
-  assert.ok(cgClass);
+  const hnkClassesRes = await req('GET', '/api/classes', dojoAdmin.token);
+  const cgClassesRes = await req('GET', '/api/classes', cgAdmin.token);
+  assert.equal(hnkClassesRes.statusCode, 200);
+  assert.equal(cgClassesRes.statusCode, 200);
+  const hnkClass = (hnkClassesRes.json() as any).classes[0];
+  const cgClass = (cgClassesRes.json() as any).classes[0];
+  assert.ok(hnkClass && cgClass);
   assert.notEqual(hnkClass.dojoId, cgClass.dojoId);
 
-  const coachCreateClass = await app.inject({
-    method: 'POST', url: '/api/classes', headers: auth(coach.token),
-    payload: { code: 'DENIED', name: 'Không được tạo', activeDays: [2] }
-  });
-  assert.equal(coachCreateClass.statusCode, 403);
+  // Cross-tenant class detail must be blocked.
+  assert.equal((await req('GET', `/api/classes/${cgClass.id}`, dojoAdmin.token)).statusCode, 403);
+  assert.equal((await req('POST', '/api/classes', coach.token, { code: 'DENIED', name: 'Denied', activeDays: [2] })).statusCode, 403);
 
-  const students = await app.inject({ method: 'GET', url: '/api/students', headers: auth(dojoAdmin.token) });
-  assert.equal(students.statusCode, 200);
-  const seededStudent = (students.json() as any).students.find((s: any) => s.code === 'HNK001');
+  // Create a second HNK class for makeup testing.
+  const secondClassRes = await req('POST', '/api/classes', dojoAdmin.token, { code: `MU${Date.now()}`, name: 'Lớp học bù E2E', activeDays: [4] });
+  assert.equal(secondClassRes.statusCode, 201, secondClassRes.body);
+  const secondClass = (secondClassRes.json() as any).class;
+
+  // Student CRUD permissions.
+  const studentsRes = await req('GET', '/api/students', dojoAdmin.token);
+  assert.equal(studentsRes.statusCode, 200);
+  const seededStudent = (studentsRes.json() as any).students.find((s: any) => s.code === 'HNK001');
   assert.ok(seededStudent);
 
-  const teacherStudentCode = `T${Date.now()}`;
-  const teacherCreateStudent = await app.inject({
-    method: 'POST', url: '/api/students', headers: auth(teacher.token),
-    payload: { code: teacherStudentCode, name: 'Võ sinh Teacher tạo', belt: 'Trắng' }
-  });
-  assert.equal(teacherCreateStudent.statusCode, 201, teacherCreateStudent.body);
-  const teacherStudent = (teacherCreateStudent.json() as any).student;
+  const teacherCreatedRes = await req('POST', '/api/students', teacher.token, { code: `T${Date.now()}`, name: 'Võ sinh Teacher tạo', belt: 'Trắng', classId: hnkClass.id });
+  assert.equal(teacherCreatedRes.statusCode, 201, teacherCreatedRes.body);
+  const teacherStudent = (teacherCreatedRes.json() as any).student;
   assert.equal(teacherStudent.dojoId, dojoAdmin.user.dojoId);
+  assert.equal((await req('POST', '/api/students', coach.token, { code: `C${Date.now()}`, name: 'Denied' })).statusCode, 403);
+  assert.equal((await req('PATCH', `/api/students/${teacherStudent.id}`, teacher.token, { belt: 'Vàng' })).statusCode, 200);
+  assert.equal((await req('DELETE', `/api/students/${teacherStudent.id}`, teacher.token)).statusCode, 403);
 
-  const coachCreateStudent = await app.inject({
-    method: 'POST', url: '/api/students', headers: auth(coach.token),
-    payload: { code: `C${Date.now()}`, name: 'Không được tạo' }
-  });
-  assert.equal(coachCreateStudent.statusCode, 403);
+  // Enroll seeded student into second class, then keep original as registered class for makeup.
+  const enrollmentRes = await req('POST', `/api/students/${seededStudent.id}/enrollments`, teacher.token, { classId: secondClass.id, isPrimary: false });
+  assert.equal(enrollmentRes.statusCode, 201, enrollmentRes.body);
 
-  const sessionDate = new Date(Date.now() + Math.floor(Math.random() * 1000000)).toISOString();
-  const createSession = await app.inject({
-    method: 'POST', url: '/api/attendance/sessions', headers: auth(teacher.token),
-    payload: { classId: hnkClass.id, sessionDate, title: 'E2E session' }
-  });
-  assert.equal(createSession.statusCode, 201, createSession.body);
-  const session = (createSession.json() as any).session;
+  // Attendance session + normal flow.
+  const sessionDate = new Date(Date.now() + 3_000_000).toISOString();
+  const sessionRes = await req('POST', '/api/attendance/sessions', teacher.token, { classId: hnkClass.id, sessionDate, title: 'E2E normal' });
+  assert.equal(sessionRes.statusCode, 201, sessionRes.body);
+  const session = (sessionRes.json() as any).session;
+  assert.equal((await req('POST', '/api/attendance/sessions', teacher.token, { classId: cgClass.id, sessionDate: new Date(Date.now() + 4_000_000).toISOString() })).statusCode, 403);
 
-  const crossTenantSession = await app.inject({
-    method: 'POST', url: '/api/attendance/sessions', headers: auth(teacher.token),
-    payload: { classId: cgClass.id, sessionDate: new Date(Date.now() + 2000000).toISOString() }
-  });
-  assert.equal(crossTenantSession.statusCode, 403);
-
-  const markPresent = await app.inject({
-    method: 'PUT', url: `/api/attendance/sessions/${session.id}/records`, headers: auth(coach.token),
-    payload: { studentId: seededStudent.id, status: 'PRESENT', type: 'NORMAL', registeredClassId: hnkClass.id }
-  });
+  const markPresent = await req('PUT', `/api/attendance/sessions/${session.id}/records`, coach.token, { studentId: seededStudent.id, status: 'PRESENT', type: 'NORMAL', registeredClassId: hnkClass.id });
   assert.equal(markPresent.statusCode, 200, markPresent.body);
-
-  const markLate = await app.inject({
-    method: 'PUT', url: `/api/attendance/sessions/${session.id}/records`, headers: auth(coach.token),
-    payload: { studentId: seededStudent.id, status: 'LATE', type: 'NORMAL', registeredClassId: hnkClass.id, lateMinutes: 7 }
-  });
+  const markLate = await req('PUT', `/api/attendance/sessions/${session.id}/records`, coach.token, { studentId: seededStudent.id, status: 'LATE', type: 'NORMAL', registeredClassId: hnkClass.id, lateMinutes: 7 });
   assert.equal(markLate.statusCode, 200, markLate.body);
   assert.equal((markLate.json() as any).record.lateMinutes, 7);
 
-  const cgStudents = await prisma.student.findMany({ where: { dojoId: otherDojoAdmin.user.dojoId! } });
-  let foreignStudent = cgStudents[0];
-  if (!foreignStudent) foreignStudent = await prisma.student.create({ data: { dojoId: otherDojoAdmin.user.dojoId!, code: `CG${Date.now()}`, name: 'Foreign Student' } });
+  // Business-rule failures.
+  const wrongNormal = await req('PUT', `/api/attendance/sessions/${session.id}/records`, coach.token, { studentId: seededStudent.id, status: 'PRESENT', type: 'NORMAL', registeredClassId: secondClass.id });
+  assert.equal(wrongNormal.statusCode, 400);
+  assert.equal((wrongNormal.json() as any).error, 'NORMAL_CLASS_MISMATCH');
+  const wrongMakeup = await req('PUT', `/api/attendance/sessions/${session.id}/records`, coach.token, { studentId: seededStudent.id, status: 'PRESENT', type: 'MAKEUP', registeredClassId: hnkClass.id });
+  assert.equal(wrongMakeup.statusCode, 400);
+  assert.equal((wrongMakeup.json() as any).error, 'MAKEUP_REQUIRES_ORIGIN_CLASS');
 
-  const crossTenantMark = await app.inject({
-    method: 'PUT', url: `/api/attendance/sessions/${session.id}/records`, headers: auth(coach.token),
-    payload: { studentId: foreignStudent.id, status: 'PRESENT', type: 'MAKEUP', registeredClassId: cgClass.id }
-  });
+  // Valid makeup: attend hnkClass while registeredClass is secondClass.
+  const validMakeup = await req('PUT', `/api/attendance/sessions/${session.id}/records`, coach.token, { studentId: seededStudent.id, status: 'PRESENT', type: 'MAKEUP', registeredClassId: secondClass.id });
+  assert.equal(validMakeup.statusCode, 200, validMakeup.body);
+
+  // Bulk attendance.
+  const bulkRes = await req('PUT', `/api/attendance/sessions/${session.id}/records/bulk`, coach.token, { records: [
+    { studentId: seededStudent.id, status: 'PRESENT', type: 'NORMAL', registeredClassId: hnkClass.id }
+  ] });
+  assert.equal(bulkRes.statusCode, 200, bulkRes.body);
+  assert.equal((bulkRes.json() as any).records.length, 1);
+
+  // Cross tenant attendance must fail.
+  let foreignStudent = await prisma.student.findFirst({ where: { dojoId: cgAdmin.user.dojoId } });
+  if (!foreignStudent) foreignStudent = await prisma.student.create({ data: { dojoId: cgAdmin.user.dojoId, code: `CG${Date.now()}`, name: 'Foreign Student' } });
+  const crossTenantMark = await req('PUT', `/api/attendance/sessions/${session.id}/records`, coach.token, { studentId: foreignStudent.id, status: 'PRESENT', type: 'MAKEUP', registeredClassId: cgClass.id });
   assert.equal(crossTenantMark.statusCode, 400);
   assert.equal((crossTenantMark.json() as any).error, 'TENANT_MISMATCH');
 
-  const finalize = await app.inject({ method: 'POST', url: `/api/attendance/sessions/${session.id}/finalize`, headers: auth(teacher.token) });
-  assert.equal(finalize.statusCode, 200);
+  // Finalize prevents all later changes and class deletion with history.
+  assert.equal((await req('POST', `/api/attendance/sessions/${session.id}/finalize`, teacher.token)).statusCode, 200);
+  assert.equal((await req('POST', `/api/attendance/sessions/${session.id}/finalize`, teacher.token)).statusCode, 200);
+  assert.equal((await req('PUT', `/api/attendance/sessions/${session.id}/records`, coach.token, { studentId: seededStudent.id, status: 'PRESENT', type: 'NORMAL', registeredClassId: hnkClass.id })).statusCode, 409);
+  assert.equal((await req('DELETE', `/api/classes/${hnkClass.id}`, dojoAdmin.token)).statusCode, 409);
 
-  const markAfterFinalize = await app.inject({
-    method: 'PUT', url: `/api/attendance/sessions/${session.id}/records`, headers: auth(coach.token),
-    payload: { studentId: seededStudent.id, status: 'PRESENT', type: 'NORMAL', registeredClassId: hnkClass.id }
-  });
-  assert.equal(markAfterFinalize.statusCode, 409);
-  assert.equal((markAfterFinalize.json() as any).error, 'SESSION_FINALIZED');
+  // Tuition default permissions deny teacher.
+  assert.equal((await req('GET', '/api/tuition/invoices', teacher.token)).statusCode, 403);
+  assert.equal((await req('POST', '/api/tuition/invoices', teacher.token, { studentId: seededStudent.id, monthKey: '2099-01', amountDue: 500000 })).statusCode, 403);
 
-  const teacherInvoice = await app.inject({
-    method: 'POST', url: '/api/tuition/invoices', headers: auth(teacher.token),
-    payload: { studentId: seededStudent.id, monthKey: '2099-01', amountDue: 500000 }
-  });
-  assert.equal(teacherInvoice.statusCode, 403);
+  // Grant teacher tuition view/edit and verify permission becomes effective server-side.
+  const permissionPayload = {
+    dojoId: dojoAdmin.user.dojoId,
+    canViewTuition: true, canEditTuition: true, canEditSchedule: true, canTakeAttendance: true,
+    canAddStudent: true, canEditStudentInfo: true, canDeleteStudent: false, canAddDateSession: true, canExportData: true
+  };
+  assert.equal((await req('PUT', '/api/admin/permissions/TEACHER', dojoAdmin.token, permissionPayload)).statusCode, 200);
+  assert.equal((await req('GET', '/api/tuition/invoices', teacher.token)).statusCode, 200);
 
-  const invoiceRes = await app.inject({
-    method: 'POST', url: '/api/tuition/invoices', headers: auth(dojoAdmin.token),
-    payload: { studentId: seededStudent.id, monthKey: `E2E-${Date.now()}`, amountDue: 500000 }
-  });
+  const monthKey = `E2E-${Date.now()}`;
+  const invoiceRes = await req('POST', '/api/tuition/invoices', teacher.token, { studentId: seededStudent.id, monthKey, amountDue: 500000 });
   assert.equal(invoiceRes.statusCode, 201, invoiceRes.body);
   const invoice = (invoiceRes.json() as any).invoice;
+  const p1 = await req('POST', `/api/tuition/invoices/${invoice.id}/payments`, teacher.token, { amount: 200000, method: 'CASH' });
+  assert.equal(p1.statusCode, 201, p1.body);
+  assert.equal((p1.json() as any).invoice.status, 'PARTIAL');
+  const overpay = await req('POST', `/api/tuition/invoices/${invoice.id}/payments`, teacher.token, { amount: 400000 });
+  assert.equal(overpay.statusCode, 400);
+  assert.equal((overpay.json() as any).error, 'OVERPAYMENT');
+  const p2 = await req('POST', `/api/tuition/invoices/${invoice.id}/payments`, teacher.token, { amount: 300000, method: 'TRANSFER' });
+  assert.equal(p2.statusCode, 201);
+  assert.equal((p2.json() as any).invoice.status, 'PAID');
+  const summary = await req('GET', `/api/tuition/summary?monthKey=${encodeURIComponent(monthKey)}`, teacher.token);
+  assert.equal(summary.statusCode, 200);
+  assert.equal((summary.json() as any).summary.paid, 1);
 
-  const payment1 = await app.inject({
-    method: 'POST', url: `/api/tuition/invoices/${invoice.id}/payments`, headers: auth(dojoAdmin.token),
-    payload: { amount: 200000, method: 'CASH' }
-  });
-  assert.equal(payment1.statusCode, 201);
-  assert.equal((payment1.json() as any).invoice.status, 'PARTIAL');
+  // Cross-tenant tuition remains blocked even after teacher permission granted.
+  assert.equal((await req('POST', '/api/tuition/invoices', teacher.token, { studentId: foreignStudent.id, monthKey: `DENY-${Date.now()}`, amountDue: 1 })).statusCode, 403);
 
-  const payment2 = await app.inject({
-    method: 'POST', url: `/api/tuition/invoices/${invoice.id}/payments`, headers: auth(dojoAdmin.token),
-    payload: { amount: 300000, method: 'TRANSFER' }
-  });
-  assert.equal(payment2.statusCode, 201);
-  assert.equal((payment2.json() as any).invoice.status, 'PAID');
+  // Admin user management and tenant isolation.
+  const staffRes = await req('POST', '/api/admin/users', dojoAdmin.token, { username: `staff_${Date.now()}`, password: 'strong123', fullName: 'Staff E2E', role: 'COACH', dojoId: dojoAdmin.user.dojoId });
+  assert.equal(staffRes.statusCode, 201, staffRes.body);
+  const staff = (staffRes.json() as any).user;
+  assert.equal((await req('POST', '/api/admin/users', dojoAdmin.token, { username: `bad_${Date.now()}`, password: 'strong123', fullName: 'Bad', role: 'COACH', dojoId: cgAdmin.user.dojoId })).statusCode, 403);
+  assert.equal((await req('PATCH', `/api/admin/users/${staff.id}`, dojoAdmin.token, { status: 'LOCKED' })).statusCode, 200);
+  assert.equal((await login(staff.username, 'strong123', 403)).error, 'ACCOUNT_LOCKED');
+  assert.equal((await req('PATCH', `/api/admin/users/${staff.id}`, dojoAdmin.token, { status: 'ACTIVE' })).statusCode, 200);
+  assert.equal((await login(staff.username, 'strong123')).user.role, 'COACH');
+  assert.equal((await req('POST', `/api/admin/users/${staff.id}/password`, dojoAdmin.token, { password: 'changed123' })).statusCode, 200);
+  assert.equal((await login(staff.username, 'strong123', 401)).error, 'INVALID_CREDENTIALS');
+  assert.equal((await login(staff.username, 'changed123')).user.id, staff.id);
 
-  const foreignInvoiceAttempt = await app.inject({
-    method: 'POST', url: '/api/tuition/invoices', headers: auth(dojoAdmin.token),
-    payload: { studentId: foreignStudent.id, monthKey: `DENY-${Date.now()}`, amountDue: 1 }
-  });
-  assert.equal(foreignInvoiceAttempt.statusCode, 403);
+  // Self change password validates old password and prevents reuse.
+  assert.equal((await req('POST', '/api/auth/change-password', staff.token, { currentPassword: 'bad', newPassword: 'another123' })).statusCode, 400);
+  const refreshedStaff = await login(staff.username, 'changed123');
+  assert.equal((await req('POST', '/api/auth/change-password', refreshedStaff.token, { currentPassword: 'changed123', newPassword: 'changed123' })).statusCode, 400);
+  assert.equal((await req('POST', '/api/auth/change-password', refreshedStaff.token, { currentPassword: 'changed123', newPassword: 'another123' })).statusCode, 200);
+  assert.equal((await login(staff.username, 'another123')).user.id, staff.id);
 
-  const auditCount = await prisma.auditLog.count({ where: { dojoId: dojoAdmin.user.dojoId! } });
-  assert.ok(auditCount >= 4);
+  // Lock a dojo: members can no longer login, then restore it.
+  assert.equal((await req('PATCH', `/api/admin/dojos/${cgAdmin.user.dojoId}`, admin.token, { status: 'LOCKED' })).statusCode, 200);
+  assert.equal((await login('dojo_cg', 'dojo123', 403)).error, 'DOJO_LOCKED');
+  assert.equal((await req('PATCH', `/api/admin/dojos/${cgAdmin.user.dojoId}`, admin.token, { status: 'ACTIVE' })).statusCode, 200);
+  assert.equal((await login('dojo_cg', 'dojo123')).user.role, 'DOJO_ADMIN');
 
-  console.log('E2E PASS: auth, RBAC, tenant isolation, students, attendance, finalize, tuition, audit');
+  const auditRes = await req('GET', '/api/admin/audit?limit=500', dojoAdmin.token);
+  assert.equal(auditRes.statusCode, 200);
+  assert.ok((auditRes.json() as any).auditLogs.length >= 10);
+
+  console.log('E2E PASS: 40+ assertions across auth, roles, dynamic permissions, tenant isolation, student/class CRUD, enrollment, normal/makeup/bulk attendance, finalize, tuition/overpayment, account and dojo lock, password changes, audit');
 } finally {
   await app.close();
   await prisma.$disconnect();
