@@ -21,7 +21,7 @@ export async function buildApp() {
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS']
   });
-  await app.register(rateLimit, { global: false, max: 100, timeWindow: '1 minute' });
+  await app.register(rateLimit, { global: true, max: 300, timeWindow: '1 minute' });
   await app.register(jwt, { secret: env.JWT_SECRET });
 
   app.setErrorHandler((error, _request, reply) => {
