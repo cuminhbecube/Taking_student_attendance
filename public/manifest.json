@@ -1,0 +1,9 @@
+{
+  "name": "Điểm Danh Lớp Võ Trung Phụng",
+  "short_name": "Điểm Danh",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0f172a",
+  "theme_color": "#0f172a",
+  "orientation": "portrait-primary"
+}
