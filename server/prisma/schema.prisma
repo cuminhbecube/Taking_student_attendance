@@ -1,0 +1,248 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  SUPER_ADMIN
+  DOJO_ADMIN
+  TEACHER
+  COACH
+}
+
+enum AccountStatus {
+  ACTIVE
+  LOCKED
+}
+
+enum AttendanceStatus {
+  PRESENT
+  ABSENT
+  LATE
+  EXCUSED
+}
+
+enum AttendanceType {
+  NORMAL
+  MAKEUP
+  TRIAL
+}
+
+enum TuitionStatus {
+  UNPAID
+  PARTIAL
+  PAID
+}
+
+model Dojo {
+  id          String           @id @default(cuid())
+  code        String           @unique
+  name        String
+  address     String?
+  phone       String?
+  status      AccountStatus    @default(ACTIVE)
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+  users       User[]
+  permissions RolePermission[]
+  classes     DojoClass[]
+  students    Student[]
+  sessions    AttendanceSession[]
+  invoices    TuitionInvoice[]
+  auditLogs   AuditLog[]
+}
+
+model User {
+  id           String        @id @default(cuid())
+  username     String        @unique
+  passwordHash String
+  fullName     String
+  role         UserRole
+  dojoId       String?
+  phone        String?
+  email        String?
+  status       AccountStatus @default(ACTIVE)
+  lastLoginAt  DateTime?
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+  dojo         Dojo?         @relation(fields: [dojoId], references: [id], onDelete: Restrict)
+  auditLogs    AuditLog[]
+
+  @@index([dojoId, role])
+}
+
+model RolePermission {
+  id                 String   @id @default(cuid())
+  dojoId             String
+  role               UserRole
+  canViewTuition     Boolean  @default(false)
+  canEditTuition     Boolean  @default(false)
+  canEditSchedule    Boolean  @default(false)
+  canTakeAttendance  Boolean  @default(false)
+  canAddStudent      Boolean  @default(false)
+  canEditStudentInfo Boolean  @default(false)
+  canDeleteStudent   Boolean  @default(false)
+  canAddDateSession  Boolean  @default(false)
+  canExportData      Boolean  @default(false)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+  dojo               Dojo     @relation(fields: [dojoId], references: [id], onDelete: Cascade)
+
+  @@unique([dojoId, role])
+}
+
+model DojoClass {
+  id             String              @id @default(cuid())
+  dojoId         String
+  code           String
+  name           String
+  activeDays     Int[]
+  startTime      String?
+  endTime        String?
+  venue          String?
+  instructorName String?
+  createdAt      DateTime            @default(now())
+  updatedAt      DateTime            @updatedAt
+  dojo           Dojo                @relation(fields: [dojoId], references: [id], onDelete: Cascade)
+  enrollments    ClassEnrollment[]
+  sessions       AttendanceSession[]
+  registeredHere AttendanceRecord[]  @relation("RegisteredClass")
+  attendedHere   AttendanceRecord[]  @relation("AttendedClass")
+
+  @@unique([dojoId, code])
+  @@index([dojoId, name])
+}
+
+model Student {
+  id          String            @id @default(cuid())
+  dojoId      String
+  code        String
+  name        String
+  belt        String?
+  dob         DateTime?
+  parentPhone String?
+  notes       String?
+  isActive    Boolean           @default(true)
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+  dojo        Dojo              @relation(fields: [dojoId], references: [id], onDelete: Cascade)
+  enrollments ClassEnrollment[]
+  attendance  AttendanceRecord[]
+  invoices    TuitionInvoice[]
+
+  @@unique([dojoId, code])
+  @@index([dojoId, name])
+  @@index([parentPhone])
+}
+
+model ClassEnrollment {
+  id        String    @id @default(cuid())
+  classId   String
+  studentId String
+  startedAt DateTime  @default(now())
+  endedAt   DateTime?
+  isPrimary Boolean   @default(true)
+  class     DojoClass @relation(fields: [classId], references: [id], onDelete: Cascade)
+  student   Student   @relation(fields: [studentId], references: [id], onDelete: Cascade)
+
+  @@unique([classId, studentId, startedAt])
+  @@index([studentId, endedAt])
+}
+
+model AttendanceSession {
+  id          String             @id @default(cuid())
+  dojoId      String
+  classId     String
+  sessionDate DateTime
+  title       String?
+  isFinalized Boolean            @default(false)
+  finalizedAt DateTime?
+  finalizedBy String?
+  createdAt   DateTime           @default(now())
+  updatedAt   DateTime           @updatedAt
+  dojo        Dojo               @relation(fields: [dojoId], references: [id], onDelete: Cascade)
+  class       DojoClass          @relation(fields: [classId], references: [id], onDelete: Cascade)
+  records     AttendanceRecord[]
+
+  @@unique([classId, sessionDate])
+  @@index([dojoId, sessionDate])
+}
+
+model AttendanceRecord {
+  id                String           @id @default(cuid())
+  sessionId         String
+  studentId         String
+  status            AttendanceStatus
+  type              AttendanceType   @default(NORMAL)
+  registeredClassId String
+  attendedClassId   String
+  checkedAt         DateTime          @default(now())
+  checkedByUserId   String?
+  note              String?
+  lateMinutes       Int?
+  createdAt         DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
+  session           AttendanceSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  student           Student          @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  registeredClass   DojoClass        @relation("RegisteredClass", fields: [registeredClassId], references: [id], onDelete: Restrict)
+  attendedClass     DojoClass        @relation("AttendedClass", fields: [attendedClassId], references: [id], onDelete: Restrict)
+
+  @@unique([sessionId, studentId])
+  @@index([studentId, checkedAt])
+  @@index([attendedClassId, checkedAt])
+}
+
+model TuitionInvoice {
+  id          String         @id @default(cuid())
+  dojoId      String
+  studentId   String
+  monthKey    String
+  amountDue   Decimal        @db.Decimal(12, 2)
+  status      TuitionStatus  @default(UNPAID)
+  note        String?
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+  dojo        Dojo           @relation(fields: [dojoId], references: [id], onDelete: Cascade)
+  student     Student        @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  payments    TuitionPayment[]
+
+  @@unique([dojoId, studentId, monthKey])
+  @@index([dojoId, monthKey, status])
+}
+
+model TuitionPayment {
+  id        String         @id @default(cuid())
+  invoiceId String
+  amount    Decimal        @db.Decimal(12, 2)
+  paidAt    DateTime       @default(now())
+  method    String?
+  note      String?
+  createdBy String?
+  createdAt DateTime       @default(now())
+  invoice   TuitionInvoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  @@index([invoiceId, paidAt])
+}
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  dojoId     String?
+  actorUserId String?
+  action     String
+  entityType String
+  entityId   String?
+  beforeJson Json?
+  afterJson  Json?
+  metadata   Json?
+  createdAt  DateTime @default(now())
+  dojo       Dojo?    @relation(fields: [dojoId], references: [id], onDelete: SetNull)
+  actor      User?    @relation(fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  @@index([dojoId, createdAt])
+  @@index([entityType, entityId])
+  @@index([actorUserId, createdAt])
+}
