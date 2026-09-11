@@ -38,6 +38,16 @@ async function effectivePermissions(role: UserRole, dojoId: string | null) {
   };
 }
 
+function setSessionCookie(reply: any, token: string) {
+  reply.setCookie('ea_session', token, {
+    path: '/api',
+    httpOnly: true,
+    secure: process.env.NODE_ENV === 'production',
+    sameSite: 'lax',
+    maxAge: 60 * 60 * 12
+  });
+}
+
 export async function authRoutes(app: FastifyInstance) {
   app.post('/login', async (request, reply) => {
     const parsed = loginSchema.safeParse(request.body);
@@ -54,6 +64,7 @@ export async function authRoutes(app: FastifyInstance) {
 
     await prisma.user.update({ where: { id: user.id }, data: { lastLoginAt: new Date() } });
     const token = await reply.jwtSign({ sub: user.id, role: user.role, dojoId: user.dojoId, username: user.username }, { expiresIn: '12h' });
+    setSessionCookie(reply, token);
     return {
       token,
       user: {
@@ -63,6 +74,11 @@ export async function authRoutes(app: FastifyInstance) {
         permissions: await effectivePermissions(user.role, user.dojoId)
       }
     };
+  });
+
+  app.post('/logout', async (_request, reply) => {
+    reply.clearCookie('ea_session', { path: '/api' });
+    return { success: true };
   });
 
   app.get('/me', { preHandler: [authenticate] }, async (request, reply) => {
