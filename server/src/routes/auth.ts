@@ -65,7 +65,7 @@ export async function authRoutes(app: FastifyInstance) {
     if (!ok) return reply.code(401).send({ error: 'INVALID_CREDENTIALS', message: 'Tên đăng nhập hoặc mật khẩu không đúng.' });
 
     await prisma.user.update({ where: { id: user.id }, data: { lastLoginAt: new Date() } });
-    const token = await reply.jwtSign({ sub: user.id, role: user.role, dojoId: user.dojoId, username: user.username }, { expiresIn: '12h' });
+    const token = await reply.jwtSign({ sub: user.id, role: user.role, dojoId: user.dojoId, username: user.username, ver: user.sessionVersion }, { expiresIn: '12h' });
     setSessionCookie(reply, token);
     return {
       token,
@@ -107,9 +107,10 @@ export async function authRoutes(app: FastifyInstance) {
 
     const passwordHash = await bcrypt.hash(parsed.data.newPassword, 12);
     await prisma.$transaction([
-      prisma.user.update({ where: { id: user.id }, data: { passwordHash } }),
+      prisma.user.update({ where: { id: user.id }, data: { passwordHash, sessionVersion: { increment: 1 } } }),
       prisma.auditLog.create({ data: { dojoId: user.dojoId, actorUserId: user.id, action: 'PASSWORD_CHANGED', entityType: 'User', entityId: user.id } })
     ]);
-    return { success: true };
+    reply.clearCookie('ea_session', { path: '/api' });
+    return { success: true, reauthenticate: true };
   });
 }
