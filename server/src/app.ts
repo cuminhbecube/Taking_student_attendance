@@ -1,4 +1,5 @@
 import Fastify from 'fastify';
+import cookie from '@fastify/cookie';
 import cors from '@fastify/cors';
 import helmet from '@fastify/helmet';
 import jwt from '@fastify/jwt';
@@ -16,13 +17,17 @@ export async function buildApp() {
   const app = Fastify({ logger: process.env.NODE_ENV !== 'test', trustProxy: true, bodyLimit: 1_000_000 });
 
   await app.register(helmet, { global: true, contentSecurityPolicy: false });
+  await app.register(cookie);
   await app.register(cors, {
     origin: env.CORS_ORIGIN.split(',').map(origin => origin.trim()),
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS']
   });
   await app.register(rateLimit, { global: true, max: 300, timeWindow: '1 minute' });
-  await app.register(jwt, { secret: env.JWT_SECRET });
+  await app.register(jwt, {
+    secret: env.JWT_SECRET,
+    cookie: { cookieName: 'ea_session', signed: false }
+  });
 
   app.setErrorHandler((error, _request, reply) => {
     if (error instanceof Prisma.PrismaClientKnownRequestError) {
