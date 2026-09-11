@@ -8,12 +8,14 @@ declare module '@fastify/jwt' {
       role: UserRole;
       dojoId: string | null;
       username: string;
+      ver: number;
     };
     user: {
       sub: string;
       role: UserRole;
       dojoId: string | null;
       username: string;
+      ver: number;
     };
   }
 }
