@@ -28,7 +28,23 @@ export type ServerUser = {
 export type Dojo = { id: string; code: string; name: string; status: string; address?: string; phone?: string };
 export type ClassItem = { id: string; dojoId: string; code: string; name: string; activeDays: number[]; startTime?: string; endTime?: string; venue?: string; instructorName?: string; _count?: { enrollments: number; sessions: number } };
 export type Enrollment = { id: string; classId: string; studentId: string; isPrimary: boolean; endedAt?: string | null; class: ClassItem };
-export type StudentItem = { id: string; dojoId: string; code: string; name: string; belt?: string; dob?: string; parentPhone?: string; notes?: string; isActive: boolean; enrollments: Enrollment[] };
+export type StudentItem = {
+  id: string;
+  dojoId: string;
+  code: string;
+  name: string;
+  gender?: 'MALE' | 'FEMALE' | 'OTHER' | null;
+  belt?: string | null;
+  dob?: string | null;
+  parentPhone?: string | null;
+  contactName?: string | null;
+  address?: string | null;
+  notes?: string | null;
+  isActive: boolean;
+  createdAt?: string;
+  updatedAt: string;
+  enrollments: Enrollment[];
+};
 export type AttendanceStatus = 'PRESENT' | 'ABSENT' | 'LATE' | 'EXCUSED';
 export type AttendanceType = 'NORMAL' | 'MAKEUP' | 'TRIAL';
 export type AttendanceRecord = { id: string; studentId: string; status: AttendanceStatus; type: AttendanceType; registeredClassId: string; attendedClassId: string; lateMinutes?: number | null; note?: string; checkedAt?: string; createdAt?: string; updatedAt: string; student?: StudentItem; registeredClass?: ClassItem };
