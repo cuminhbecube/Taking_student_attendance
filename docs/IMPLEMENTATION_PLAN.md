@@ -1,37 +1,58 @@
 # Kế hoạch triển khai full-stack cho Taking_student_attendance
 
+## Trạng thái hiện tại
+
+| Phase | Trạng thái | Kết quả |
+|---|---|---|
+| 0 — Baseline / kiến trúc | ✅ Hoàn tất | Frontend legacy được giữ để đối chiếu; production entry chuyển sang `ProductionApp` modular |
+| 1 — Backend foundation | ✅ Hoàn tất | Fastify 5 + TypeScript + health endpoint + env/CORS |
+| 2 — Database schema | ✅ Hoàn tất | PostgreSQL + Prisma schema + migration production đã commit |
+| 3 — Authentication + RBAC | ✅ Hoàn tất | bcrypt, JWT, HttpOnly cookie, role + permission guard, tenant isolation |
+| 4 — Dojo/Class/Student | ✅ Hoàn tất core | CRUD, enrollment, tìm tiếng Việt không dấu, admin class UI |
+| 5 — Attendance | ✅ Hoàn tất core | NORMAL/MAKEUP/TRIAL, bulk, finalize, audit, conflict detection |
+| 6 — Tuition | ✅ Hoàn tất core | invoice, partial payment, status derivation, overpayment guard |
+| 7 — Frontend migration | ✅ Hoàn tất core | Auth/Class/Student/Attendance/Tuition/Admin đều dùng API server-side |
+| 8 — Multi-device sync | ✅ MVP hoàn tất | Polling + `updatedAt` optimistic conflict guard; SSE/WebSocket để sau MVP |
+| 9 — Security hardening | ✅ MVP hoàn tất | Helmet, rate-limit, HttpOnly cookie, demo guard, backup/restore, HTTPS deployment guide |
+| 10 — CI/Test/Deploy | ✅ Hoàn tất core | Build + audit + PostgreSQL migrations + multi-suite E2E/regression + production Docker smoke |
+
+### Các hạng mục hậu MVP
+- SSE/WebSocket thay polling nếu cần realtime tức thời.
+- Browser E2E bằng Playwright cho các thao tác UI quan trọng.
+- Package lock riêng cho `server/` để dependency backend reproducible tuyệt đối.
+- Chính sách retention/archival AuditLog dài hạn.
+- Tự động hóa backup off-host và kiểm thử restore định kỳ.
+- QR attendance nếu nghiệp vụ thực tế yêu cầu.
+
 ## Mục tiêu
 Chuyển dự án từ prototype React + localStorage sang hệ thống full-stack có backend, database, xác thực, RBAC và dữ liệu multi-tenant an toàn.
 
 ## Nguyên tắc triển khai
-- Không phá UI hiện tại trong giai đoạn đầu.
-- Mọi thay đổi backend được làm song song, frontend migrate từng module.
-- Multi-tenant phải được enforce ở backend bằng dojoId lấy từ phiên đăng nhập, không tin dojoId do client gửi.
-- Mật khẩu chỉ lưu dạng hash.
-- Điểm danh và học phí phải có audit trail.
-- Mỗi bước có tiêu chí PASS/FAIL rõ ràng.
+- Server là source of truth cho dữ liệu nghiệp vụ.
+- Multi-tenant được enforce ở backend bằng `dojoId` từ phiên đăng nhập; không tin scope do client gửi.
+- Mật khẩu chỉ lưu dạng bcrypt hash.
+- Điểm danh, học phí và thao tác quản trị quan trọng có audit trail.
+- Mọi thay đổi quan trọng phải có tiêu chí PASS/FAIL và regression test khi phù hợp.
+- Production schema chỉ triển khai bằng Prisma migrations, không bằng `db push`.
 
 ## Phase 0 — Baseline và dọn kiến trúc
-### Công việc
-1. Giữ `src/App.tsx` làm luồng frontend hiện hành.
-2. Đánh dấu `src/context/AppContext.tsx` và các view cũ là legacy nếu không còn import.
-3. Không xóa ngay code legacy trước khi build/test xác nhận.
-4. Ghi lại data model chính: Dojo, UserAccount, DojoClass, Student, AttendanceSession, AttendanceRecord, TuitionPayment, AuditLog.
+### Đã triển khai
+- Giữ `src/App.tsx` legacy để đối chiếu.
+- Production dùng `src/ProductionApp.tsx` và các domain panel dưới `src/app/`.
+- Business data không còn dựa vào localStorage.
 
 ### PASS
-- `npm run build` frontend vẫn thành công.
-- Không thay đổi hành vi UI hiện tại.
+- Frontend production build thành công trong CI.
 
 ## Phase 1 — Backend foundation
-### Công việc
-- Tạo `server/` dùng Node.js + TypeScript + Fastify.
+### Đã triển khai
+- Node.js + TypeScript + Fastify.
 - Prisma + PostgreSQL.
-- Health endpoint `GET /api/health`.
-- Cấu hình env và CORS.
+- `GET /api/health`.
+- Env validation, CORS, error mapping.
 
 ### PASS
-- Backend compile thành công.
-- `GET /api/health` trả `{ status: "ok" }`.
+- Backend compile và healthcheck thành công.
 
 ## Phase 2 — Database schema
 ### Bảng chính
@@ -47,102 +68,114 @@ Chuyển dự án từ prototype React + localStorage sang hệ thống full-sta
 - TuitionPayment
 - AuditLog
 
-### PASS
-- `prisma validate` thành công.
-- Có unique/index cho username, dojo/code, student/code và attendance session/student.
+### Đã triển khai thêm
+- Unique/index cho tenant/business keys.
+- `prisma/migrations/20260911010000_init/migration.sql`.
+- CI chạy `prisma migrate deploy` trên PostgreSQL sạch.
 
 ## Phase 3 — Authentication + RBAC
-### Công việc
-- `POST /api/auth/login`
-- JWT access token.
+### Đã triển khai
+- `POST /api/auth/login`, `GET /api/auth/me`, `POST /api/auth/logout`.
 - bcrypt password verification.
-- Middleware `authenticate`.
-- Middleware role/permission.
-- `GET /api/auth/me`.
+- JWT 12 giờ trong HttpOnly cookie; Bearer hỗ trợ test/CLI.
+- Account/dojo lock.
+- Role guard + permission guard đọc DB để permission revoke có hiệu lực ngay.
+- Password change/reset.
 
 ### PASS
 - Sai mật khẩu -> 401.
-- Tài khoản LOCKED -> 403.
+- Tài khoản/võ đường LOCKED -> 403.
+- Cookie-only `/auth/me` PASS trong regression test.
 - User dojo A không truy cập dữ liệu dojo B.
 
 ## Phase 4 — Dojo/Class/Student API
-### API
-- `GET /api/dojos` (SUPER_ADMIN)
-- CRUD class.
-- CRUD student.
-- Search student không dấu.
+### Đã triển khai
+- Dojo admin API.
+- CRUD class + UI quản trị lớp.
+- CRUD/soft-deactivate student.
+- Enrollment / unenrollment.
+- Search student không dấu bằng Unicode normalization.
 
 ### PASS
-- TEACHER/COACH chỉ đọc dữ liệu đúng dojo.
-- Các thao tác sửa/xóa bị chặn nếu không có quyền.
+- Cross-tenant read/write bị chặn.
+- Class create → patch → delete được regression test.
+- `Nguyễn Đức` tìm bằng `nguyen duc` được functional regression test.
 
 ## Phase 5 — Attendance API
-### API
-- Tạo session theo lớp/ngày.
-- Điểm danh PRESENT/ABSENT/LATE/EXCUSED.
-- Batch mark present.
-- Makeup attendance: lưu `registeredClassId` và `attendedClassId`.
+### Đã triển khai
+- Session theo lớp/ngày, ngày được normalize để tránh duplicate khác giờ.
+- PRESENT/ABSENT/LATE/EXCUSED.
+- NORMAL/MAKEUP/TRIAL.
+- Bulk attendance.
 - Finalize session.
+- AuditLog.
+- `expectedUpdatedAt` chống silent overwrite giữa nhiều thiết bị.
+- Export CSV + PNG/Web Share.
 
 ### PASS
 - Unique `(sessionId, studentId)`.
-- Session finalized không được chỉnh nếu không có quyền override.
-- Mọi thay đổi tạo AuditLog.
+- Finalized session không chỉnh được.
+- Stale writer nhận `409 ATTENDANCE_CONFLICT`.
+- Học bù lưu cả lớp đăng ký và lớp thực tế.
 
 ## Phase 6 — Tuition API
-### Công việc
+### Đã triển khai
 - Invoice theo tháng.
-- Payment nhiều lần hỗ trợ PARTIAL.
-- Tính PAID/PARTIAL/UNPAID từ dữ liệu thật, không chỉ lưu cờ.
-
-### PASS
-- Tổng payment được tính chính xác.
-- COACH mặc định không xem/sửa học phí.
+- Nhiều payment hỗ trợ PARTIAL.
+- Tổng tiền thực tế quyết định UNPAID/PARTIAL/PAID.
+- Chặn overpayment.
+- Permission `canViewTuition` / `canEditTuition`.
 
 ## Phase 7 — Frontend migration
-### Thứ tự
-1. Auth
-2. Current user / dojo context
-3. Class
-4. Student
-5. Attendance
-6. Tuition
-7. Admin accounts/permissions
-
-### Chiến lược
-- Tạo `src/services/api.ts`.
-- Giữ localStorage adapter tạm thời làm fallback trong lúc migrate.
-- Khi module đã migrate xong mới bỏ localStorage tương ứng.
+### Đã triển khai
+- API client.
+- Current user/dojo scope.
+- AttendancePanel.
+- StudentsPanel.
+- TuitionPanel.
+- AdminPanel.
+- Class management.
+- Production login không lưu JWT trong localStorage.
+- Demo credential chỉ hiện ở DEV hoặc khi bật cờ explicit.
 
 ## Phase 8 — Đồng bộ nhiều thiết bị
+### Đã triển khai
 - Server là source of truth.
-- Optimistic UI có rollback khi API lỗi.
-- Có `updatedAt` để phát hiện dữ liệu cũ.
-- Sau MVP có thể thêm WebSocket/SSE để cập nhật điểm danh realtime.
+- Poll attendance định kỳ.
+- `updatedAt` + conflict response để ngăn ghi đè dữ liệu mới.
+- Permission/session refresh định kỳ.
+
+### Hậu MVP
+- SSE/WebSocket nếu cần cập nhật tức thời thay polling.
 
 ## Phase 9 — Bảo mật và production hardening
-- Rate limit login.
+### Đã triển khai
 - Helmet/security headers.
-- Refresh token hoặc session cookie HttpOnly.
-- Audit log bất biến ở tầng ứng dụng.
-- Backup PostgreSQL.
-- HTTPS reverse proxy.
-- Không để tài khoản demo trong production.
+- Global rate limiting + login limit.
+- HttpOnly session cookie.
+- CORS allow-list.
+- Demo seed bị từ chối khi `NODE_ENV=production` trừ explicit override.
+- PostgreSQL backup/restore scripts.
+- Nginx reverse proxy; HTTPS được terminate ở proxy/load balancer phía trước.
+- Production `.env` mẫu không chứa secret thật.
 
 ## Phase 10 — CI/Test/Deploy
-- Unit test service.
-- Integration test auth/RBAC/attendance.
-- GitHub Actions build frontend + backend + prisma validate.
-- Docker Compose: PostgreSQL + API + frontend/reverse proxy.
+### Đã triển khai
+- Frontend build.
+- Backend TypeScript build.
+- `npm audit` gate.
+- Prisma generate/validate/migrate deploy.
+- PostgreSQL 16 service thật.
+- E2E 50+ assertions.
+- Regression: HttpOnly cookie, session date normalization, concurrency, permission revoke.
+- Functional regression: search không dấu, tenant isolation, class CRUD lifecycle.
+- Docker production stack: PostgreSQL + API + Nginx/Web.
+- `deploy-smoke` build/start stack thật và gọi `/healthz` qua Nginx.
 
-## Thứ tự commit đề xuất
-1. `docs: add full-stack migration plan`
-2. `feat(server): add Fastify TypeScript foundation`
-3. `feat(db): add Prisma multi-tenant schema`
-4. `feat(auth): add JWT login and RBAC middleware`
-5. `feat(api): add dojo class and student endpoints`
-6. `feat(api): add attendance and audit endpoints`
-7. `feat(api): add tuition endpoints`
-8. `refactor(web): add API client and migrate auth`
-9. `refactor(web): migrate attendance and tuition`
-10. `ci: add full-stack checks`
+## Tiêu chí trước merge vào `main`
+1. Frontend job PASS.
+2. Backend job PASS gồm audit + migration + all test suites.
+3. `deploy-smoke` PASS.
+4. Không còn migration/schema drift.
+5. PR diff được rà lần cuối về secret/demo credential/tenant scope.
+6. PR chỉ chuyển khỏi Draft sau khi head cuối cùng đạt toàn bộ tiêu chí trên.
