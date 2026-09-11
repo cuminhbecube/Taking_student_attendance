@@ -27,6 +27,7 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLogin }) => {
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const showDemoAccounts = import.meta.env.DEV || import.meta.env.VITE_SHOW_DEMO_ACCOUNTS === 'true';
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -40,8 +41,6 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLogin }) => {
         body: JSON.stringify({ username: username.trim().toLowerCase(), password })
       });
 
-      // Remove any legacy browser-readable token. The server has already set the
-      // HttpOnly ea_session cookie, which JavaScript cannot access.
       setAccessToken(null);
       const user: UserAccount = {
         id: response.user.id,
@@ -116,7 +115,7 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLogin }) => {
               <label className="font-bold text-slate-300 block mb-1.5 text-xs">Tên đăng nhập</label>
               <div className="relative flex items-center">
                 <User className="w-4 h-4 text-slate-400 absolute left-3.5" />
-                <input type="text" required autoFocus autoComplete="username" value={username} onChange={e => setUsername(e.target.value)} placeholder="admin, hanoikid, gv_lan..." className="w-full pl-10 pr-4 py-3 rounded-xl bg-slate-900 border border-slate-700 text-white font-medium text-xs focus:ring-2 focus:ring-indigo-500 focus:outline-none" />
+                <input type="text" required autoFocus autoComplete="username" value={username} onChange={e => setUsername(e.target.value)} placeholder="Nhập tên đăng nhập" className="w-full pl-10 pr-4 py-3 rounded-xl bg-slate-900 border border-slate-700 text-white font-medium text-xs focus:ring-2 focus:ring-indigo-500 focus:outline-none" />
               </div>
             </div>
 
@@ -135,7 +134,7 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLogin }) => {
             </button>
           </form>
 
-          <div className="mt-6 pt-4 border-t border-slate-700/80">
+          {showDemoAccounts && <div className="mt-6 pt-4 border-t border-slate-700/80">
             <div className="text-[11px] font-extrabold text-slate-400 uppercase tracking-wider mb-2.5">Tài khoản test backend</div>
             <div className="grid grid-cols-2 gap-2 text-xs">
               {demos.map(item => {
@@ -152,7 +151,7 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLogin }) => {
               <span className="flex items-center gap-1.5 text-slate-300 font-bold"><Building2 className="w-3 h-3 text-cyan-400" />CLB Cầu Giấy</span>
               <span className="font-mono text-[10px] text-slate-400">dojo_cg / dojo123</span>
             </button>
-          </div>
+          </div>}
         </div>
       </div>
     </div>
