@@ -1,17 +1,33 @@
 import type { FastifyInstance } from 'fastify';
+import { Prisma } from '@prisma/client';
 import { z } from 'zod';
 import { prisma } from '../lib/prisma.js';
 import { authenticate } from '../middleware/auth.js';
 import { requirePermission } from '../middleware/permissions.js';
 
-const studentSchema = z.object({
+const optionalText = (max: number) => z.string().max(max).nullable().optional();
+
+const studentFieldsSchema = z.object({
   code: z.string().min(1).max(50),
   name: z.string().min(1).max(200),
-  belt: z.string().max(100).optional(),
-  dob: z.string().optional(),
-  parentPhone: z.string().max(30).optional(),
-  notes: z.string().max(2000).optional()
+  gender: z.enum(['MALE', 'FEMALE', 'OTHER']).nullable().optional(),
+  belt: optionalText(100),
+  dob: z.string().nullable().optional(),
+  parentPhone: optionalText(30),
+  contactName: optionalText(200),
+  address: optionalText(500),
+  notes: optionalText(2000),
+  isActive: z.boolean().optional()
 });
+
+const createStudentSchema = studentFieldsSchema.extend({
+  dojoId: z.string().min(1).optional(),
+  classId: z.string().min(1).optional()
+}).strict();
+
+const updateStudentSchema = studentFieldsSchema.partial().extend({
+  expectedUpdatedAt: z.string().datetime().optional()
+}).strict();
 
 const enrollmentSchema = z.object({
   classId: z.string().min(1),
@@ -24,6 +40,38 @@ function getDojoId(request: any, requested?: string) {
 
 function canAccess(request: any, dojoId: string) {
   return request.user.role === 'SUPER_ADMIN' || request.user.dojoId === dojoId;
+}
+
+function normalizeOptionalText(value: string | null | undefined) {
+  if (value === undefined) return undefined;
+  if (value === null) return null;
+  const trimmed = value.trim();
+  return trimmed.length ? trimmed : null;
+}
+
+function parseDob(value: string | null | undefined): { value?: Date | null; error?: string } {
+  if (value === undefined) return { value: undefined };
+  if (value === null || value.trim() === '') return { value: null };
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return { error: 'INVALID_DOB' };
+  const date = new Date(`${value}T00:00:00.000Z`);
+  if (Number.isNaN(date.getTime()) || date.toISOString().slice(0, 10) !== value) return { error: 'INVALID_DOB' };
+  if (date.getTime() > Date.now()) return { error: 'DOB_IN_FUTURE' };
+  return { value: date };
+}
+
+function studentSnapshot(student: any) {
+  return {
+    code: student.code,
+    name: student.name,
+    gender: student.gender ?? null,
+    belt: student.belt ?? null,
+    dob: student.dob ? new Date(student.dob).toISOString().slice(0, 10) : null,
+    parentPhone: student.parentPhone ?? null,
+    contactName: student.contactName ?? null,
+    address: student.address ?? null,
+    notes: student.notes ?? null,
+    isActive: student.isActive
+  };
 }
 
 export function normalizeVietnameseSearch(value: string) {
@@ -65,6 +113,8 @@ export async function studentRoutes(app: FastifyInstance) {
       student.code,
       student.name,
       student.parentPhone ?? '',
+      student.contactName ?? '',
+      student.address ?? '',
       student.belt ?? ''
     ].join(' ')).includes(needle));
     return { students: filtered };
@@ -82,55 +132,132 @@ export async function studentRoutes(app: FastifyInstance) {
   });
 
   app.post('/', { preHandler: [requirePermission('canAddStudent')] }, async (request, reply) => {
-    const body = (request.body ?? {}) as z.infer<typeof studentSchema> & { dojoId?: string; classId?: string };
-    const parsed = studentSchema.safeParse(body);
+    const parsed = createStudentSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: 'INVALID_INPUT', details: parsed.error.flatten() });
 
-    const dojoId = getDojoId(request, body.dojoId);
+    const dojoId = getDojoId(request, parsed.data.dojoId);
     if (!dojoId) return reply.code(400).send({ error: 'DOJO_REQUIRED' });
-    const dob = parsed.data.dob ? new Date(parsed.data.dob) : undefined;
-    if (dob && Number.isNaN(dob.getTime())) return reply.code(400).send({ error: 'INVALID_DOB' });
+    const code = parsed.data.code.trim();
+    const name = parsed.data.name.trim();
+    if (!code || !name) return reply.code(400).send({ error: 'INVALID_INPUT' });
+    const dobResult = parseDob(parsed.data.dob);
+    if (dobResult.error) return reply.code(400).send({ error: dobResult.error });
 
-    if (body.classId) {
-      const dojoClass = await prisma.dojoClass.findUnique({ where: { id: body.classId } });
+    const duplicate = await prisma.student.findFirst({ where: { dojoId, code } });
+    if (duplicate) return reply.code(409).send({ error: 'STUDENT_CODE_EXISTS' });
+
+    if (parsed.data.classId) {
+      const dojoClass = await prisma.dojoClass.findUnique({ where: { id: parsed.data.classId } });
       if (!dojoClass || dojoClass.dojoId !== dojoId) return reply.code(400).send({ error: 'CLASS_TENANT_MISMATCH' });
     }
 
-    const student = await prisma.$transaction(async tx => {
-      const created = await tx.student.create({
-        data: {
-          dojoId,
-          code: parsed.data.code.trim(),
-          name: parsed.data.name.trim(),
-          belt: parsed.data.belt,
-          dob,
-          parentPhone: parsed.data.parentPhone,
-          notes: parsed.data.notes
-        }
+    try {
+      const student = await prisma.$transaction(async tx => {
+        const created = await tx.student.create({
+          data: {
+            dojoId,
+            code,
+            name,
+            gender: parsed.data.gender ?? null,
+            belt: normalizeOptionalText(parsed.data.belt),
+            dob: dobResult.value,
+            parentPhone: normalizeOptionalText(parsed.data.parentPhone),
+            contactName: normalizeOptionalText(parsed.data.contactName),
+            address: normalizeOptionalText(parsed.data.address),
+            notes: normalizeOptionalText(parsed.data.notes),
+            isActive: parsed.data.isActive ?? true
+          }
+        });
+        if (parsed.data.classId) await tx.classEnrollment.create({ data: { classId: parsed.data.classId, studentId: created.id, isPrimary: true } });
+        await tx.auditLog.create({
+          data: {
+            dojoId,
+            actorUserId: request.user.sub,
+            action: 'STUDENT_CREATED',
+            entityType: 'Student',
+            entityId: created.id,
+            afterJson: studentSnapshot(created),
+            metadata: { classId: parsed.data.classId ?? null }
+          }
+        });
+        return created;
       });
-      if (body.classId) await tx.classEnrollment.create({ data: { classId: body.classId, studentId: created.id, isPrimary: true } });
-      await tx.auditLog.create({ data: { dojoId, actorUserId: request.user.sub, action: 'STUDENT_CREATED', entityType: 'Student', entityId: created.id, metadata: { code: created.code, name: created.name, classId: body.classId ?? null } } });
-      return created;
-    });
-
-    return reply.code(201).send({ student });
+      return reply.code(201).send({ student });
+    } catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') return reply.code(409).send({ error: 'STUDENT_CODE_EXISTS' });
+      throw error;
+    }
   });
 
   app.patch('/:studentId', { preHandler: [requirePermission('canEditStudentInfo')] }, async (request, reply) => {
     const { studentId } = request.params as { studentId: string };
-    const parsed = studentSchema.partial().safeParse(request.body);
+    const parsed = updateStudentSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: 'INVALID_INPUT', details: parsed.error.flatten() });
+
+    const { expectedUpdatedAt, ...input } = parsed.data;
+    if (!Object.keys(input).length) return reply.code(400).send({ error: 'NO_CHANGES' });
+
     const existing = await prisma.student.findUnique({ where: { id: studentId } });
     if (!existing) return reply.code(404).send({ error: 'STUDENT_NOT_FOUND' });
     if (!canAccess(request, existing.dojoId)) return reply.code(403).send({ error: 'FORBIDDEN' });
-    const dob = parsed.data.dob ? new Date(parsed.data.dob) : undefined;
-    if (dob && Number.isNaN(dob.getTime())) return reply.code(400).send({ error: 'INVALID_DOB' });
-    const student = await prisma.$transaction(async tx => {
-      const value = await tx.student.update({ where: { id: studentId }, data: { ...parsed.data, dob } });
-      await tx.auditLog.create({ data: { dojoId: existing.dojoId, actorUserId: request.user.sub, action: 'STUDENT_UPDATED', entityType: 'Student', entityId: studentId, metadata: { fields: Object.keys(parsed.data) } } });
-      return value;
-    });
-    return { student };
+
+    const code = input.code === undefined ? undefined : input.code.trim();
+    const name = input.name === undefined ? undefined : input.name.trim();
+    if (code !== undefined && !code) return reply.code(400).send({ error: 'INVALID_CODE' });
+    if (name !== undefined && !name) return reply.code(400).send({ error: 'INVALID_NAME' });
+
+    const dobResult = parseDob(input.dob);
+    if (dobResult.error) return reply.code(400).send({ error: dobResult.error });
+
+    if (code && code !== existing.code) {
+      const duplicate = await prisma.student.findFirst({ where: { dojoId: existing.dojoId, code, NOT: { id: studentId } } });
+      if (duplicate) return reply.code(409).send({ error: 'STUDENT_CODE_EXISTS' });
+    }
+
+    const data = {
+      ...(code !== undefined ? { code } : {}),
+      ...(name !== undefined ? { name } : {}),
+      ...(input.gender !== undefined ? { gender: input.gender } : {}),
+      ...(input.belt !== undefined ? { belt: normalizeOptionalText(input.belt) } : {}),
+      ...(input.dob !== undefined ? { dob: dobResult.value } : {}),
+      ...(input.parentPhone !== undefined ? { parentPhone: normalizeOptionalText(input.parentPhone) } : {}),
+      ...(input.contactName !== undefined ? { contactName: normalizeOptionalText(input.contactName) } : {}),
+      ...(input.address !== undefined ? { address: normalizeOptionalText(input.address) } : {}),
+      ...(input.notes !== undefined ? { notes: normalizeOptionalText(input.notes) } : {}),
+      ...(input.isActive !== undefined ? { isActive: input.isActive } : {})
+    };
+
+    try {
+      const student = await prisma.$transaction(async tx => {
+        const updated = await tx.student.updateMany({
+          where: {
+            id: studentId,
+            ...(expectedUpdatedAt ? { updatedAt: new Date(expectedUpdatedAt) } : {})
+          },
+          data
+        });
+        if (updated.count !== 1) throw new Error('STUDENT_CONFLICT');
+        const value = await tx.student.findUniqueOrThrow({ where: { id: studentId } });
+        await tx.auditLog.create({
+          data: {
+            dojoId: existing.dojoId,
+            actorUserId: request.user.sub,
+            action: 'STUDENT_UPDATED',
+            entityType: 'Student',
+            entityId: studentId,
+            beforeJson: studentSnapshot(existing),
+            afterJson: studentSnapshot(value),
+            metadata: { fields: Object.keys(input) }
+          }
+        });
+        return value;
+      });
+      return { student };
+    } catch (error) {
+      if (error instanceof Error && error.message === 'STUDENT_CONFLICT') return reply.code(409).send({ error: 'STUDENT_CONFLICT' });
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') return reply.code(409).send({ error: 'STUDENT_CODE_EXISTS' });
+      throw error;
+    }
   });
 
   app.delete('/:studentId', { preHandler: [requirePermission('canDeleteStudent')] }, async (request, reply) => {
