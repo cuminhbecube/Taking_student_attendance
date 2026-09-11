@@ -1,8 +1,8 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Check, LockKeyhole, Plus, RefreshCw, Search, UserPlus, X } from 'lucide-react';
+import { Check, LockKeyhole, Plus, RefreshCw, Search, Share2, UserPlus, X } from 'lucide-react';
 import { apiFetch, ApiError } from '../services/api';
 import type { AttendanceRecord, AttendanceStatus, ClassItem, PermissionSet, Session, StudentItem } from './types';
-import { downloadCsv } from './export';
+import { downloadCsv, shareAttendanceImage } from './export';
 
 type Props = {
   classes: ClassItem[];
@@ -135,15 +135,44 @@ export function AttendancePanel({ classes, students, classId, setClassId, permis
     catch (error) { reportError(error); }
   };
 
+  const originClassName = (student: StudentItem, record?: AttendanceRecord) => {
+    return record?.registeredClass?.name
+      ?? student.enrollments.find(item => item.classId === record?.registeredClassId)?.class.name
+      ?? student.enrollments.find(item => item.classId === classId)?.class.name
+      ?? '';
+  };
+
   const exportAttendance = () => {
     if (!session) return;
     const rows: Array<Array<string | number>> = [['STT', 'Mã', 'Họ tên', 'Lớp đăng ký', 'Trạng thái', 'Loại']];
     allRows.forEach((student, index) => {
       const record = recordMap.get(student.id);
-      const origin = record?.registeredClass?.name ?? student.enrollments.find(item => item.id === record?.registeredClassId)?.class.name ?? student.enrollments.find(item => item.classId === classId)?.class.name ?? '';
-      rows.push([index + 1, student.code, student.name, origin, record?.status ?? 'CHƯA ĐIỂM DANH', record?.type ?? 'NORMAL']);
+      rows.push([index + 1, student.code, student.name, originClassName(student, record), record?.status ?? 'CHƯA ĐIỂM DANH', record?.type ?? 'NORMAL']);
     });
     downloadCsv(`diem-danh_${dateLabel(session.sessionDate).replaceAll('/', '-')}.csv`, rows);
+  };
+
+  const shareImage = async () => {
+    if (!session) return;
+    const activeClass = classes.find(item => item.id === classId);
+    try {
+      await shareAttendanceImage({
+        filename: `diem-danh_${dateLabel(session.sessionDate).replaceAll('/', '-')}.png`,
+        className: activeClass?.name || 'Lớp võ',
+        date: dateLabel(session.sessionDate),
+        rows: allRows.map((student, index) => {
+          const record = recordMap.get(student.id);
+          return {
+            index: index + 1,
+            code: student.code,
+            name: student.name,
+            originClass: originClassName(student, record),
+            status: record?.status ?? 'UNMARKED',
+            type: record?.type ?? 'NORMAL'
+          };
+        })
+      });
+    } catch (error) { reportError(error); }
   };
 
   return <section>
@@ -159,6 +188,7 @@ export function AttendancePanel({ classes, students, classId, setClassId, permis
       {permissions.canTakeAttendance && !session.isFinalized && <button onClick={() => setMakeupOpen(true)} className="px-3 py-2 rounded-xl bg-cyan-600 text-white text-xs font-bold"><UserPlus className="inline w-4 h-4"/> Học bù</button>}
       {permissions.canTakeAttendance && !session.isFinalized && <button onClick={markAllPresent} className="px-3 py-2 rounded-xl bg-emerald-600 text-white text-xs font-bold">Có mặt tất cả</button>}
       {permissions.canExportData && <button onClick={exportAttendance} className="px-3 py-2 rounded-xl border text-xs font-bold">Xuất CSV</button>}
+      {permissions.canExportData && <button onClick={shareImage} className="px-3 py-2 rounded-xl border text-xs font-bold"><Share2 className="inline w-4 h-4"/> Chia sẻ ảnh</button>}
       {permissions.canAddDateSession && !session.isFinalized && <button onClick={finalize} className="px-3 py-2 rounded-xl bg-slate-900 text-white text-xs font-bold"><LockKeyhole className="inline w-4 h-4"/> Khóa sổ</button>}
     </div>}
 
