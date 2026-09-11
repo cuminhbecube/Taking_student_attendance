@@ -3,6 +3,7 @@ import { Banknote, Plus, Search, UserRound } from 'lucide-react';
 import { apiFetch, ApiError } from '../services/api';
 import type { ClassItem, PermissionSet, StudentItem } from './types';
 import { downloadCsv } from './export';
+import { matchesVietnameseSearch } from './search';
 
 type Props = {
   students: StudentItem[];
@@ -20,8 +21,8 @@ export function StudentsPanel({ students, classes, activeClassId, scope, isSuper
   const [search, setSearch] = useState('');
   const [classFilter, setClassFilter] = useState(activeClassId || 'ALL');
   const filtered = useMemo(() => students.filter(student => {
-    const text = `${student.code} ${student.name} ${student.parentPhone ?? ''}`.toLowerCase();
-    const matchesSearch = text.includes(search.trim().toLowerCase());
+    const text = `${student.code} ${student.name} ${student.parentPhone ?? ''} ${student.belt ?? ''}`;
+    const matchesSearch = matchesVietnameseSearch(text, search);
     const matchesClass = classFilter === 'ALL' || student.enrollments.some(enrollment => enrollment.classId === classFilter);
     return matchesSearch && matchesClass;
   }), [students, search, classFilter]);
@@ -87,7 +88,7 @@ export function StudentsPanel({ students, classes, activeClassId, scope, isSuper
 
   return <section>
     <div className="bg-white rounded-2xl border p-3 mb-3 flex flex-wrap gap-2">
-      <div className="relative flex-1 min-w-52"><Search className="absolute left-3 top-2.5 w-4 h-4 text-slate-400"/><input value={search} onChange={event => setSearch(event.target.value)} placeholder="Tìm tên, mã, SĐT..." className="w-full border rounded-xl pl-9 pr-3 py-2 text-sm"/></div>
+      <div className="relative flex-1 min-w-52"><Search className="absolute left-3 top-2.5 w-4 h-4 text-slate-400"/><input value={search} onChange={event => setSearch(event.target.value)} placeholder="Tìm tên không dấu, mã, SĐT..." className="w-full border rounded-xl pl-9 pr-3 py-2 text-sm"/></div>
       <select value={classFilter} onChange={event => setClassFilter(event.target.value)} className="border rounded-xl px-3 py-2 text-sm"><option value="ALL">Tất cả lớp</option>{classes.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select>
       {permissions.canExportData && <button onClick={exportStudents} className="px-3 py-2 rounded-xl border text-sm font-bold">Xuất CSV</button>}
       {permissions.canAddStudent && <button onClick={addStudent} className="px-3 py-2 rounded-xl bg-indigo-600 text-white text-sm font-bold"><Plus className="inline w-4 h-4"/> Thêm</button>}
