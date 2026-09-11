@@ -9,6 +9,7 @@
     "start": "node dist/server.js",
     "test:e2e": "NODE_ENV=test tsx tests/e2e.ts",
     "test:regression": "NODE_ENV=test tsx tests/regression.ts",
+    "test:functional": "NODE_ENV=test tsx tests/functional-regression.ts",
     "security:audit": "npm audit --audit-level=critical",
     "prisma:generate": "prisma generate",
     "prisma:validate": "prisma validate",
