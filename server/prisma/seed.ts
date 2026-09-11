@@ -2,6 +2,10 @@ import 'dotenv/config';
 import bcrypt from 'bcryptjs';
 import { PrismaClient, UserRole } from '@prisma/client';
 
+if (process.env.NODE_ENV === 'production' && process.env.ALLOW_DEMO_SEED !== 'true') {
+  throw new Error('Refusing to seed demo accounts in production. Set ALLOW_DEMO_SEED=true only for an intentional disposable environment.');
+}
+
 const prisma = new PrismaClient();
 
 async function upsertUser(input: { username: string; password: string; fullName: string; role: UserRole; dojoId: string | null }) {
