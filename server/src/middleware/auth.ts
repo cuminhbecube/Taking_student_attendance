@@ -17,12 +17,16 @@ export async function authenticate(request: FastifyRequest, reply: FastifyReply)
       role: true,
       dojoId: true,
       status: true,
+      sessionVersion: true,
       dojo: { select: { status: true } }
     }
   });
 
   if (!current || current.status !== 'ACTIVE' || (current.dojo && current.dojo.status !== 'ACTIVE')) {
     return reply.code(401).send({ error: 'SESSION_REVOKED', message: 'Phiên đăng nhập đã bị thu hồi hoặc tài khoản không còn hoạt động.' });
+  }
+  if (request.user.ver !== current.sessionVersion) {
+    return reply.code(401).send({ error: 'SESSION_REVOKED', message: 'Thông tin đăng nhập đã thay đổi. Vui lòng đăng nhập lại.' });
   }
 
   // Never trust stale authorization claims from an already-issued JWT. Role and
