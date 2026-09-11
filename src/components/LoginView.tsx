@@ -9,7 +9,7 @@ interface LoginViewProps {
 }
 
 type LoginResponse = {
-  token: string;
+  token?: string;
   user: {
     id: string;
     username: string;
@@ -40,7 +40,9 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLogin }) => {
         body: JSON.stringify({ username: username.trim().toLowerCase(), password })
       });
 
-      setAccessToken(response.token);
+      // Remove any legacy browser-readable token. The server has already set the
+      // HttpOnly ea_session cookie, which JavaScript cannot access.
+      setAccessToken(null);
       const user: UserAccount = {
         id: response.user.id,
         username: response.user.username,
