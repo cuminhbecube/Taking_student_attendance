@@ -117,7 +117,7 @@ export async function adminRoutes(app: FastifyInstance) {
     if (!canAdminDojo(request, target.dojoId)) return reply.code(403).send({ error: 'FORBIDDEN' });
     if (request.user.role === 'DOJO_ADMIN' && target.role === UserRole.DOJO_ADMIN) return reply.code(403).send({ error: 'FORBIDDEN' });
     const passwordHash = await bcrypt.hash(parsed.data.password, 12);
-    await prisma.user.update({ where: { id: userId }, data: { passwordHash } });
+    await prisma.user.update({ where: { id: userId }, data: { passwordHash, sessionVersion: { increment: 1 } } });
     await prisma.auditLog.create({ data: { actorUserId: request.user.sub, dojoId: target.dojoId, action: 'USER_PASSWORD_RESET', entityType: 'User', entityId: userId } });
     return { success: true };
   });
