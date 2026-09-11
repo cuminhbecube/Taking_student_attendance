@@ -14,7 +14,7 @@ const dojoSchema = z.object({
 
 const userSchema = z.object({
   username: z.string().min(3).max(50).regex(/^[a-zA-Z0-9._-]+$/),
-  password: z.string().min(6).max(128),
+  password: z.string().min(8).max(128),
   fullName: z.string().min(2).max(200),
   role: z.enum(['DOJO_ADMIN', 'TEACHER', 'COACH']),
   dojoId: z.string().min(1),
@@ -57,9 +57,7 @@ export async function adminRoutes(app: FastifyInstance) {
   app.post('/dojos', { preHandler: [requireRole('SUPER_ADMIN')] }, async (request, reply) => {
     const parsed = dojoSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: 'INVALID_INPUT', details: parsed.error.flatten() });
-    const dojo = await prisma.dojo.create({
-      data: { ...parsed.data, code: parsed.data.code.trim().toUpperCase() }
-    });
+    const dojo = await prisma.dojo.create({ data: { ...parsed.data, code: parsed.data.code.trim().toUpperCase() } });
     await prisma.auditLog.create({ data: { actorUserId: request.user.sub, dojoId: dojo.id, action: 'DOJO_CREATED', entityType: 'Dojo', entityId: dojo.id, metadata: { code: dojo.code, name: dojo.name } } });
     return reply.code(201).send({ dojo });
   });
@@ -79,11 +77,7 @@ export async function adminRoutes(app: FastifyInstance) {
     const query = (request.query ?? {}) as { dojoId?: string };
     const dojoId = resolveDojoScope(request, query.dojoId);
     if (!dojoId) return { users: [] };
-    const users = await prisma.user.findMany({
-      where: { dojoId },
-      select: { id: true, username: true, fullName: true, role: true, dojoId: true, phone: true, email: true, status: true, createdAt: true, lastLoginAt: true },
-      orderBy: [{ role: 'asc' }, { fullName: 'asc' }]
-    });
+    const users = await prisma.user.findMany({ where: { dojoId }, select: { id: true, username: true, fullName: true, role: true, dojoId: true, phone: true, email: true, status: true, createdAt: true, lastLoginAt: true }, orderBy: [{ role: 'asc' }, { fullName: 'asc' }] });
     return { users };
   });
 
@@ -116,7 +110,7 @@ export async function adminRoutes(app: FastifyInstance) {
 
   app.post('/users/:userId/password', { preHandler: [requireRole('SUPER_ADMIN', 'DOJO_ADMIN')] }, async (request, reply) => {
     const { userId } = request.params as { userId: string };
-    const parsed = z.object({ password: z.string().min(6).max(128) }).safeParse(request.body);
+    const parsed = z.object({ password: z.string().min(8).max(128) }).safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: 'INVALID_INPUT' });
     const target = await prisma.user.findUnique({ where: { id: userId } });
     if (!target || !target.dojoId) return reply.code(404).send({ error: 'USER_NOT_FOUND' });
