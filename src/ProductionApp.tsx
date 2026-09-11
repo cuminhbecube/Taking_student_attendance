@@ -139,7 +139,7 @@ export default function ProductionApp() {
           {activeTab === 'attendance' && <AttendancePanel classes={classes} students={students} classId={classId} setClassId={setClassId} permissions={user.permissions} scopeQuery={scopeQuery} onError={setError}/>} 
           {activeTab === 'students' && <StudentsPanel students={students} classes={classes} activeClassId={classId} scope={scope} isSuperAdmin={user.role === 'SUPER_ADMIN'} permissions={user.permissions} onReload={loadCore} onError={setError}/>} 
           {activeTab === 'tuition' && user.permissions.canViewTuition && <TuitionPanel students={students} permissions={user.permissions} scopeQuery={scopeQuery} onError={setError}/>} 
-          {activeTab === 'admin' && canAdmin && <AdminPanel scope={scope} scopeQuery={scopeQuery} currentUserId={user.id} onError={setError}/>} 
+          {activeTab === 'admin' && canAdmin && <AdminPanel scope={scope} scopeQuery={scopeQuery} currentUserId={user.id} onError={setError} onCoreReload={loadCore}/>} 
         </>}
     </main>
 
