@@ -50,7 +50,7 @@ function setSessionCookie(reply: any, token: string) {
 
 export async function authRoutes(app: FastifyInstance) {
   app.post('/login', {
-    config: { rateLimit: { max: 10, timeWindow: '1 minute' } }
+    config: { rateLimit: { max: 20, timeWindow: '1 minute' } }
   }, async (request, reply) => {
     const parsed = loginSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: 'INVALID_INPUT', message: 'Thiếu username hoặc password.' });
