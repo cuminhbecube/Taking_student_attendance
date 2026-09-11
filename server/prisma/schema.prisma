@@ -19,6 +19,12 @@ enum AccountStatus {
   LOCKED
 }
 
+enum StudentGender {
+  MALE
+  FEMALE
+  OTHER
+}
+
 enum AttendanceStatus {
   PRESENT
   ABSENT
@@ -123,9 +129,12 @@ model Student {
   dojoId      String
   code        String
   name        String
+  gender      StudentGender?
   belt        String?
   dob         DateTime?
   parentPhone String?
+  contactName String?
+  address     String?
   notes       String?
   isActive    Boolean           @default(true)
   createdAt   DateTime          @default(now())
