@@ -1,4 +1,5 @@
 import type { FastifyInstance } from 'fastify';
+import { Prisma } from '@prisma/client';
 import { z } from 'zod';
 import { prisma } from '../lib/prisma.js';
 import { authenticate } from '../middleware/auth.js';
@@ -69,6 +70,9 @@ export async function tuitionRoutes(app: FastifyInstance) {
 
     const existing = await prisma.tuitionInvoice.findUnique({ where: { dojoId_studentId_monthKey: { dojoId: student.dojoId, studentId: student.id, monthKey: parsed.data.monthKey } }, include: { payments: true } });
     const paid = existing?.payments.reduce((sum, p) => sum + Number(p.amount), 0) ?? 0;
+    if (paid > parsed.data.amountDue) {
+      return reply.code(400).send({ error: 'AMOUNT_BELOW_PAID', message: 'Không thể giảm học phí phải thu xuống thấp hơn số tiền đã thu.', totalPaid: paid });
+    }
     const status = paid >= parsed.data.amountDue ? 'PAID' : paid > 0 ? 'PARTIAL' : 'UNPAID';
     const invoice = await prisma.$transaction(async tx => {
       const value = await tx.tuitionInvoice.upsert({
@@ -86,24 +90,38 @@ export async function tuitionRoutes(app: FastifyInstance) {
     const { invoiceId } = request.params as { invoiceId: string };
     const parsed = paymentSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: 'INVALID_INPUT', details: parsed.error.flatten() });
-    const invoice = await prisma.tuitionInvoice.findUnique({ where: { id: invoiceId }, include: { payments: true } });
-    if (!invoice) return reply.code(404).send({ error: 'INVOICE_NOT_FOUND' });
-    if (!canAccess(request, invoice.dojoId)) return reply.code(403).send({ error: 'FORBIDDEN' });
 
-    const currentPaid = invoice.payments.reduce((sum, item) => sum + Number(item.amount), 0);
-    const amountDue = Number(invoice.amountDue);
-    if (currentPaid + parsed.data.amount > amountDue) {
-      return reply.code(400).send({ error: 'OVERPAYMENT', message: 'Số tiền thu vượt quá số học phí còn thiếu.', remaining: Math.max(amountDue - currentPaid, 0) });
+    const initial = await prisma.tuitionInvoice.findUnique({ where: { id: invoiceId } });
+    if (!initial) return reply.code(404).send({ error: 'INVOICE_NOT_FOUND' });
+    if (!canAccess(request, initial.dojoId)) return reply.code(403).send({ error: 'FORBIDDEN' });
+
+    try {
+      const result = await prisma.$transaction(async tx => {
+        const invoice = await tx.tuitionInvoice.findUnique({ where: { id: invoiceId }, include: { payments: true } });
+        if (!invoice) throw new Error('INVOICE_DISAPPEARED');
+        const currentPaid = invoice.payments.reduce((sum, item) => sum + Number(item.amount), 0);
+        const amountDue = Number(invoice.amountDue);
+        if (currentPaid + parsed.data.amount > amountDue) {
+          return { kind: 'OVERPAYMENT' as const, remaining: Math.max(amountDue - currentPaid, 0) };
+        }
+
+        const payment = await tx.tuitionPayment.create({ data: { invoiceId, amount: parsed.data.amount, method: parsed.data.method, note: parsed.data.note, createdBy: request.user.sub } });
+        const total = currentPaid + parsed.data.amount;
+        const status = total >= amountDue ? 'PAID' : total > 0 ? 'PARTIAL' : 'UNPAID';
+        const updatedInvoice = await tx.tuitionInvoice.update({ where: { id: invoiceId }, data: { status } });
+        await tx.auditLog.create({ data: { dojoId: invoice.dojoId, actorUserId: request.user.sub, action: 'TUITION_PAYMENT_CREATED', entityType: 'TuitionPayment', entityId: payment.id, metadata: { invoiceId, amount: parsed.data.amount, totalPaid: total, status } } });
+        return { kind: 'OK' as const, payment: { ...payment, amount: Number(payment.amount) }, invoice: { ...updatedInvoice, amountDue: Number(updatedInvoice.amountDue), totalPaid: total } };
+      }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+
+      if (result.kind === 'OVERPAYMENT') {
+        return reply.code(400).send({ error: 'OVERPAYMENT', message: 'Số tiền thu vượt quá số học phí còn thiếu.', remaining: result.remaining });
+      }
+      return reply.code(201).send({ payment: result.payment, invoice: result.invoice });
+    } catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2034') {
+        return reply.code(409).send({ error: 'PAYMENT_CONFLICT', message: 'Học phí vừa được cập nhật từ thiết bị khác. Vui lòng tải lại và thử lại.' });
+      }
+      throw error;
     }
-
-    const result = await prisma.$transaction(async tx => {
-      const payment = await tx.tuitionPayment.create({ data: { invoiceId, amount: parsed.data.amount, method: parsed.data.method, note: parsed.data.note, createdBy: request.user.sub } });
-      const total = currentPaid + parsed.data.amount;
-      const status = total >= amountDue ? 'PAID' : total > 0 ? 'PARTIAL' : 'UNPAID';
-      const updatedInvoice = await tx.tuitionInvoice.update({ where: { id: invoiceId }, data: { status } });
-      await tx.auditLog.create({ data: { dojoId: invoice.dojoId, actorUserId: request.user.sub, action: 'TUITION_PAYMENT_CREATED', entityType: 'TuitionPayment', entityId: payment.id, metadata: { invoiceId, amount: parsed.data.amount, totalPaid: total, status } } });
-      return { payment: { ...payment, amount: Number(payment.amount) }, invoice: { ...updatedInvoice, amountDue: Number(updatedInvoice.amountDue), totalPaid: total } };
-    });
-    return reply.code(201).send(result);
   });
 }
