@@ -53,7 +53,7 @@ jobs:
       - run: npm run security:audit
       - run: npm run prisma:generate
       - run: npm run prisma:validate
-      - run: npm run prisma:push
+      - run: npm run prisma:migrate:deploy
       - run: npm run prisma:seed
       - run: npm run build
       - run: npm run test:e2e
