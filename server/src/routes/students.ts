@@ -26,6 +26,16 @@ function canAccess(request: any, dojoId: string) {
   return request.user.role === 'SUPER_ADMIN' || request.user.dojoId === dojoId;
 }
 
+export function normalizeVietnameseSearch(value: string) {
+  return value
+    .normalize('NFD')
+    .replace(/\p{Diacritic}/gu, '')
+    .replace(/[đĐ]/g, match => match === 'Đ' ? 'D' : 'd')
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 export async function studentRoutes(app: FastifyInstance) {
   app.addHook('preHandler', authenticate);
 
@@ -38,14 +48,7 @@ export async function studentRoutes(app: FastifyInstance) {
       where: {
         dojoId,
         ...(query.includeInactive === 'true' ? {} : { isActive: true }),
-        ...(query.classId ? { enrollments: { some: { classId: query.classId, endedAt: null } } } : {}),
-        ...(query.q ? {
-          OR: [
-            { name: { contains: query.q, mode: 'insensitive' } },
-            { code: { contains: query.q, mode: 'insensitive' } },
-            { parentPhone: { contains: query.q } }
-          ]
-        } : {})
+        ...(query.classId ? { enrollments: { some: { classId: query.classId, endedAt: null } } } : {})
       },
       include: {
         enrollments: {
@@ -56,7 +59,15 @@ export async function studentRoutes(app: FastifyInstance) {
       orderBy: { name: 'asc' }
     });
 
-    return { students };
+    if (!query.q?.trim()) return { students };
+    const needle = normalizeVietnameseSearch(query.q);
+    const filtered = students.filter(student => normalizeVietnameseSearch([
+      student.code,
+      student.name,
+      student.parentPhone ?? '',
+      student.belt ?? ''
+    ].join(' ')).includes(needle));
+    return { students: filtered };
   });
 
   app.get('/:studentId', async (request, reply) => {
