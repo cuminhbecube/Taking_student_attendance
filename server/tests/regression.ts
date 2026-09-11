@@ -17,6 +17,26 @@ async function login(username: string, password: string) {
 }
 
 try {
+  // Regression #0: browser auth must work through an HttpOnly cookie while
+  // Bearer tokens remain available for API/E2E tooling.
+  const cookieLogin = await call('POST', '/api/auth/login', undefined, { username: 'hanoikid', password: '123456' });
+  assert.equal(cookieLogin.statusCode, 200, cookieLogin.body);
+  const setCookieHeader = cookieLogin.headers['set-cookie'];
+  assert.ok(setCookieHeader, 'login did not set ea_session cookie');
+  const firstSetCookie = Array.isArray(setCookieHeader) ? setCookieHeader[0] : String(setCookieHeader);
+  assert.match(firstSetCookie, /ea_session=/i);
+  assert.match(firstSetCookie, /HttpOnly/i);
+  assert.match(firstSetCookie, /SameSite=Lax/i);
+  const cookiePair = firstSetCookie.split(';')[0];
+  const cookieMe = await app.inject({ method: 'GET', url: '/api/auth/me', headers: { cookie: cookiePair } });
+  assert.equal(cookieMe.statusCode, 200, cookieMe.body);
+  assert.equal((cookieMe.json() as any).user.username, 'hanoikid');
+  const cookieLogout = await app.inject({ method: 'POST', url: '/api/auth/logout', headers: { cookie: cookiePair } });
+  assert.equal(cookieLogout.statusCode, 200, cookieLogout.body);
+  const clearHeader = cookieLogout.headers['set-cookie'];
+  assert.ok(clearHeader, 'logout did not clear ea_session cookie');
+  assert.match(Array.isArray(clearHeader) ? clearHeader[0] : String(clearHeader), /ea_session=/i);
+
   const hnk = await login('hanoikid', '123456');
   const teacher = await login('gv_lan', '123456');
   const coach = await login('hlv_tuan', '123456');
@@ -66,7 +86,6 @@ try {
   const initialRecord = (initialWrite.json() as any).record;
   assert.ok(initialRecord.updatedAt);
 
-  // Simulate device B changing the record after device A loaded it.
   await new Promise(resolve => setTimeout(resolve, 10));
   const newerWrite = await call('PUT', `/api/attendance/sessions/${firstSession.id}/records`, coach.token, {
     studentId: student.id,
@@ -122,11 +141,10 @@ try {
   });
   assert.equal(deniedCreate.statusCode, 403, deniedCreate.body);
 
-  // Restore seed-compatible teacher permissions for repeatable local runs.
   const defaults = { ...revoke, canViewTuition: false, canEditTuition: false };
   await call('PUT', '/api/admin/permissions/TEACHER', hnk.token, defaults);
 
-  console.log('REGRESSION PASS: session-day normalization, optimistic attendance conflict, immediate permission revocation');
+  console.log('REGRESSION PASS: HttpOnly cookie auth, session-day normalization, optimistic attendance conflict, immediate permission revocation');
 } finally {
   await app.close();
   await prisma.$disconnect();
