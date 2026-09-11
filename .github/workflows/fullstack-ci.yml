@@ -1,0 +1,92 @@
+name: Full-stack CI
+
+on:
+  push:
+    branches:
+      - feat/fullstack-foundation
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+
+  backend:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: attendance
+          POSTGRES_PASSWORD: attendance
+          POSTGRES_DB: attendance
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U attendance -d attendance"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=10
+    defaults:
+      run:
+        working-directory: server
+    env:
+      DATABASE_URL: postgresql://attendance:attendance@localhost:5432/attendance?schema=public
+      JWT_SECRET: ci-only-secret-with-at-least-thirty-two-characters
+      CORS_ORIGIN: http://localhost:5173
+      NODE_ENV: test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm install
+      - run: npm run security:audit
+      - run: npm run prisma:generate
+      - run: npm run prisma:validate
+      - run: npm run prisma:migrate:deploy
+      - run: npm run prisma:seed
+      - run: npm run build
+      - run: npm run test:e2e
+      - run: npm run test:regression
+
+  deploy-smoke:
+    runs-on: ubuntu-latest
+    needs: [frontend, backend]
+    env:
+      POSTGRES_DB: attendance
+      POSTGRES_USER: attendance
+      POSTGRES_PASSWORD: ci-compose-database-password
+      JWT_SECRET: ci-compose-jwt-secret-with-at-least-thirty-two-characters
+      CORS_ORIGIN: http://localhost:18080
+      WEB_PORT: 18080
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate production compose
+        run: docker compose -f docker-compose.prod.yml config
+      - name: Build and start production stack
+        run: docker compose -f docker-compose.prod.yml up --build -d
+      - name: Verify web and API health
+        run: |
+          for i in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:18080/healthz >/dev/null; then
+              curl --fail --silent http://127.0.0.1:18080/ >/dev/null
+              exit 0
+            fi
+            sleep 2
+          done
+          docker compose -f docker-compose.prod.yml ps
+          docker compose -f docker-compose.prod.yml logs --no-color
+          exit 1
+      - name: Stop production stack
+        if: always()
+        run: docker compose -f docker-compose.prod.yml down -v
