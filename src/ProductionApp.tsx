@@ -24,7 +24,7 @@ export default function ProductionApp() {
   const scopeQuery = scope ? `dojoId=${encodeURIComponent(scope)}` : '';
   const selectedDojo = useMemo(() => dojos.find(item => item.id === dojoId), [dojos, dojoId]);
 
-  const logout = useCallback(() => {
+  const clearLocalSession = useCallback(() => {
     setAccessToken(null);
     localStorage.removeItem('ea_auth_user');
     setUser(null);
@@ -36,6 +36,11 @@ export default function ProductionApp() {
     setTab('attendance');
   }, []);
 
+  const logout = useCallback(() => {
+    apiFetch('/auth/logout', { method: 'POST' }).catch(() => undefined);
+    clearLocalSession();
+  }, [clearLocalSession]);
+
   const refreshMe = useCallback(async (initial = false) => {
     try {
       const response = await apiFetch<{ user: ServerUser }>('/auth/me');
@@ -43,13 +48,13 @@ export default function ProductionApp() {
       if (response.user.role !== 'SUPER_ADMIN') setDojoId(response.user.dojoId || '');
       return true;
     } catch (caught) {
-      if (caught instanceof ApiError && caught.status === 401) logout();
+      if (caught instanceof ApiError && caught.status === 401) clearLocalSession();
       else if (!initial) setError(caught instanceof Error ? caught.message : 'Không thể cập nhật phiên đăng nhập.');
       return false;
     } finally {
       if (initial) setChecking(false);
     }
-  }, [logout]);
+  }, [clearLocalSession]);
 
   useEffect(() => { refreshMe(true); }, [refreshMe]);
   useEffect(() => {
